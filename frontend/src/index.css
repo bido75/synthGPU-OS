@@ -1,0 +1,142 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: #0a0a0f;
+  color: #f1f5f9;
+  font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track { background: #12121a; }
+::-webkit-scrollbar-thumb { background: #2a2a3e; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #00d4ff44; }
+
+.card {
+  background: #12121a;
+  border: 1px solid #2a2a3e;
+  border-radius: 12px;
+  padding: 1.25rem;
+}
+
+.card-title {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #94a3b8;
+  margin-bottom: 1rem;
+}
+
+.btn {
+  padding: 0.5rem 1.25rem;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: none;
+  outline: none;
+}
+
+.btn-primary {
+  background: #00d4ff22;
+  color: #00d4ff;
+  border: 1px solid #00d4ff44;
+}
+.btn-primary:hover {
+  background: #00d4ff33;
+  border-color: #00d4ff88;
+  box-shadow: 0 0 12px #00d4ff33;
+}
+.btn-primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  background: #7c3aed22;
+  color: #a78bfa;
+  border: 1px solid #7c3aed44;
+}
+.btn-secondary:hover {
+  background: #7c3aed33;
+}
+
+.stat-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: #00d4ff;
+  line-height: 1;
+}
+
+.stat-label {
+  font-size: 0.7rem;
+  color: #94a3b8;
+  margin-top: 0.25rem;
+}
+
+.badge-no-gpu {
+  background: #10b98122;
+  color: #10b981;
+  border: 1px solid #10b98144;
+  padding: 0.2rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.glow-cyan {
+  box-shadow: 0 0 20px #00d4ff22, 0 0 40px #00d4ff11;
+}
+
+.demo-mode-border {
+  box-shadow: 0 0 0 2px #00d4ff, 0 0 40px #00d4ff44;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.2; }
+}
+.blink { animation: blink 1s step-end infinite; }
+
+@keyframes lane-flash {
+  0% { background-color: #00d4ff; box-shadow: 0 0 6px #00d4ff; }
+  100% { background-color: #00d4ff88; box-shadow: none; }
+}
+.lane-active { animation: lane-flash 0.4s ease-out forwards; }
+
+@keyframes token-appear {
+  0% { opacity: 0; transform: translateY(4px) scale(0.95); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+.token-new { animation: token-appear 0.25s ease-out forwards; }
+
+@keyframes progress-fill {
+  from { width: 0; }
+}
+
+.tab-active {
+  color: #00d4ff;
+  border-bottom: 2px solid #00d4ff;
+}
+.tab-inactive {
+  color: #94a3b8;
+  border-bottom: 2px solid transparent;
+}
+.tab-inactive:hover {
+  color: #f1f5f9;
+}
