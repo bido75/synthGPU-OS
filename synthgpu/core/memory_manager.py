@@ -47,7 +47,13 @@ class VirtualMemoryManager:
     # We simulate transfer overhead for authenticity
     PCIE_BANDWIDTH_GBps = 32.0
 
-    def __init__(self, vram_size_mb: int = 4096):
+    def __init__(self, vram_size_mb: int = None):
+        if vram_size_mb is None:
+            available_ram = psutil.virtual_memory().available
+            total_ram = psutil.virtual_memory().total
+            from_total     = int((total_ram     / (1024*1024)) * 0.10)
+            from_available = int((available_ram / (1024*1024)) * 0.15)
+            vram_size_mb = max(128, min(2048, (min(from_total, from_available) // 64) * 64))
         self.vram_size_bytes = vram_size_mb * 1024 * 1024
         self._allocations: Dict[int, VRAMAllocation] = {}
         self._next_handle = 1
@@ -56,12 +62,7 @@ class VirtualMemoryManager:
         self._transfer_stats = {"h2d_bytes": 0, "d2h_bytes": 0,
                                 "h2d_ms": 0.0, "d2h_ms": 0.0}
 
-        # Check we're not asking for more than available system RAM
         available_ram = psutil.virtual_memory().available
-        if self.vram_size_bytes > available_ram * 0.6:
-            self.vram_size_bytes = int(available_ram * 0.4)
-            vram_size_mb = self.vram_size_bytes // (1024 * 1024)
-
         print(f"[SynthGPU] Virtual VRAM initialized: {vram_size_mb} MB")
         print(f"[SynthGPU] System RAM available: {available_ram // (1024*1024)} MB")
 

@@ -11,7 +11,7 @@ const PRESET_PROMPTS = [
 const BACKEND_URLS = { ollama: 'http://localhost:11434', lmstudio: 'http://localhost:1234' }
 
 // ── Panel A: Backend Connection Manager ──────────────────────────────────────
-function BackendConnector({ inference, onModelSelect, onConnected }) {
+function BackendConnector({ inference, onModelSelect, onConnected, systemRam }) {
   const [backendType, setBackendType] = useState('ollama')
   const [customUrl, setCustomUrl] = useState('')
   const [connecting, setConnecting] = useState(false)
@@ -24,6 +24,15 @@ function BackendConnector({ inference, onModelSelect, onConnected }) {
   const backendName = inference?.backend
   const models = inference?.available_models || []
   const backendUrl = inference?.backend_url || ''
+  const freeRamMB = systemRam?.available_mb || 1500
+
+  const getModelBadge = (model) => {
+    const sizeMB = model.size_mb || 0
+    if (sizeMB === 0) return null
+    if (sizeMB < freeRamMB * 0.7) return { label: 'FAST', color: '#10b981', bg: '#10b98122', tip: 'Fits in RAM' }
+    if (sizeMB < freeRamMB) return { label: 'MARGINAL', color: '#f59e0b', bg: '#f59e0b22', tip: 'May use swap' }
+    return { label: 'TOO LARGE', color: '#ef4444', bg: '#ef444422', tip: 'Will use disk swap' }
+  }
 
   const testConnection = async () => {
     setConnecting(true)
@@ -142,18 +151,44 @@ function BackendConnector({ inference, onModelSelect, onConnected }) {
       </div>
 
       {connResult && (
-        <div className="mb-3 text-sm" style={{
-          color: connResult.connected ? '#10b981' : '#ef4444',
-          fontSize: '0.75rem',
-        }}>
-          {connResult.connected
-            ? `✓ ${connResult.backend} detected · ${connResult.models?.length || 0} models · ${connResult.backend_url}`
-            : `✗ Connection failed. ${connResult.error || 'Is Ollama running?'}`
-          }
-          {!connResult.connected && (
-            <div style={{ color: '#94a3b8', marginTop: 4 }}>
-              Start Ollama: <code style={{ color: '#00d4ff', background: '#00d4ff11',
-                padding: '1px 6px', borderRadius: 4 }}>ollama serve</code>
+        <div className="mb-3" style={{ fontSize: '0.75rem' }}>
+          {connResult.connected ? (
+            <div style={{ color: '#10b981', background: '#10b98111',
+                          border: '1px solid #10b98133', borderRadius: 8,
+                          padding: '0.6rem 0.75rem' }}>
+              ✓ {connResult.message || `${connResult.backend} detected · ${connResult.models?.length || 0} models`}
+            </div>
+          ) : (
+            <div style={{ background: '#ef444411', border: '1px solid #ef444433',
+                          borderRadius: 8, padding: '0.6rem 0.75rem' }}>
+              <div style={{ color: '#ef4444', fontWeight: 600, marginBottom: 4 }}>
+                ✗ {connResult.message || connResult.error || 'Connection failed'}
+              </div>
+              {connResult.fix && (
+                <div style={{ marginTop: 6 }}>
+                  <span style={{ color: '#94a3b8' }}>Run this command:</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                    <code style={{ color: '#00d4ff', background: '#00d4ff11',
+                                   padding: '2px 8px', borderRadius: 4, fontFamily: 'monospace' }}>
+                      {connResult.fix}
+                    </code>
+                    <button
+                      onClick={() => navigator.clipboard.writeText(connResult.fix)}
+                      style={{ color: '#94a3b8', background: '#2a2a3e',
+                               border: '1px solid #3a3a4e', borderRadius: 4,
+                               padding: '1px 8px', fontSize: '0.65rem', cursor: 'pointer' }}
+                      onMouseEnter={e => e.currentTarget.style.color = '#00d4ff'}
+                      onMouseLeave={e => e.currentTarget.style.color = '#94a3b8'}>
+                      Copy
+                    </button>
+                  </div>
+                </div>
+              )}
+              {connResult.fix_windows && (
+                <div style={{ color: '#94a3b8', fontSize: '0.68rem', marginTop: 4 }}>
+                  Windows: {connResult.fix_windows}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -174,22 +209,30 @@ function BackendConnector({ inference, onModelSelect, onConnected }) {
                    }}
                    onMouseEnter={e => e.currentTarget.style.background = '#00d4ff0a'}
                    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-                <div>
-                  <span style={{ color: '#f1f5f9', fontWeight: 600, fontSize: '0.8rem' }}>
+                <div className="flex items-center gap-2 flex-1 min-w-0">
+                  <span style={{ color: '#f1f5f9', fontWeight: 600, fontSize: '0.8rem',
+                                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {m.name}
                   </span>
                   {m.size_mb > 0 && (
-                    <span style={{ color: '#94a3b8', fontSize: '0.7rem', marginLeft: 8 }}>
-                      {m.size_mb >= 1000 ? `${(m.size_mb / 1000).toFixed(1)} GB` : `${m.size_mb} MB`}
+                    <span style={{ color: '#94a3b8', fontSize: '0.7rem', whiteSpace: 'nowrap' }}>
+                      {m.size_mb >= 1000 ? `${(m.size_mb / 1000).toFixed(1)}GB` : `${m.size_mb}MB`}
                     </span>
                   )}
-                  {m.name.includes('1b') && (
-                    <span style={{ color: '#10b981', fontSize: '0.62rem', marginLeft: 8,
-                                   fontWeight: 700 }}>Recommended for demo</span>
-                  )}
+                  {(() => {
+                    const badge = getModelBadge(m)
+                    if (!badge) return null
+                    return (
+                      <span title={badge.tip} style={{
+                        fontSize: '0.6rem', fontWeight: 700, padding: '1px 5px', borderRadius: 4,
+                        color: badge.color, background: badge.bg, border: `1px solid ${badge.color}55`,
+                        whiteSpace: 'nowrap', letterSpacing: '0.04em',
+                      }}>{badge.label}</span>
+                    )
+                  })()}
                 </div>
                 <button className="btn btn-primary"
-                        style={{ fontSize: '0.7rem', padding: '0.25rem 0.65rem' }}
+                        style={{ fontSize: '0.7rem', padding: '0.25rem 0.65rem', whiteSpace: 'nowrap' }}
                         onClick={() => onModelSelect && onModelSelect(m.name)}>
                   ▶ Run
                 </button>
@@ -259,6 +302,10 @@ function InferenceConsole({ inference, selectedModel, onModelChange }) {
   const [metrics, setMetrics] = useState(null)
   const [error, setError] = useState(null)
   const [showRawJson, setShowRawJson] = useState(false)
+  const [inferencePhase, setInferencePhase] = useState(null)
+  const [preflightResult, setPreflightResult] = useState(null)
+  const [elapsedMs, setElapsedMs] = useState(0)
+  const elapsedTimerRef = useRef(null)
   const wsRef = useRef(null)
   const typewriteQueue = useRef([])
   const isTyping = useRef(false)
@@ -273,6 +320,21 @@ function InferenceConsole({ inference, selectedModel, onModelChange }) {
   useEffect(() => {
     if (selectedModel) setModel(selectedModel)
   }, [selectedModel])
+
+  // Preflight check when model changes
+  useEffect(() => {
+    if (!model) { setPreflightResult(null); return }
+    const info = models.find(m => m.name === model)
+    if (!info) { setPreflightResult(null); return }
+    fetch('/api/inference/preflight', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, size_mb: info.size_mb || 0 }),
+    })
+      .then(r => r.json())
+      .then(d => setPreflightResult(d))
+      .catch(() => setPreflightResult(null))
+  }, [model])
 
   // Typewriter effect
   const drainQueue = useCallback(() => {
@@ -305,6 +367,7 @@ function InferenceConsole({ inference, selectedModel, onModelChange }) {
     ws.onmessage = (e) => {
       const data = JSON.parse(e.data)
       if (data.type === 'token' && data.token) {
+        setInferencePhase(p => p === 'loading_model' || p === null ? 'generating' : p)
         typewriteToken(data.token)
         totalTokensRef.current += 1
         allTpsRef.current.push(data.tokens_per_sec || 0)
@@ -318,12 +381,16 @@ function InferenceConsole({ inference, selectedModel, onModelChange }) {
         })
       } else if (data.type === 'done') {
         setRunning(false)
+        setInferencePhase('done')
+        clearInterval(elapsedTimerRef.current)
       } else if (data.type === 'error') {
         setError(data.message)
         setRunning(false)
+        setInferencePhase(null)
+        clearInterval(elapsedTimerRef.current)
       }
     }
-    ws.onerror = () => { setError('WebSocket connection failed'); setRunning(false) }
+    ws.onerror = () => { setError('WebSocket connection failed'); setRunning(false); setInferencePhase(null) }
     return ws
   }
 
@@ -336,11 +403,16 @@ function InferenceConsole({ inference, selectedModel, onModelChange }) {
     setError(null)
     setRunning(true)
     setMetrics(null)
+    setInferencePhase('loading_model')
+    setElapsedMs(0)
+    clearInterval(elapsedTimerRef.current)
+    const t0 = Date.now()
+    elapsedTimerRef.current = setInterval(() => setElapsedMs(Date.now() - t0), 100)
     totalTokensRef.current = 0
     allTpsRef.current = []
     typewriteQueue.current = []
     isTyping.current = false
-    startTimeRef.current = Date.now()
+    startTimeRef.current = t0
 
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       connectTokenWS()
@@ -360,6 +432,8 @@ function InferenceConsole({ inference, selectedModel, onModelChange }) {
     } catch (e) {
       setError(e.message)
       setRunning(false)
+      setInferencePhase(null)
+      clearInterval(elapsedTimerRef.current)
     }
   }
 
@@ -367,13 +441,15 @@ function InferenceConsole({ inference, selectedModel, onModelChange }) {
     wsRef.current?.close()
     wsRef.current = null
     setRunning(false)
+    setInferencePhase(null)
+    clearInterval(elapsedTimerRef.current)
     isTyping.current = false
     typewriteQueue.current = []
   }
 
   useEffect(() => {
     connectTokenWS()
-    return () => wsRef.current?.close()
+    return () => { wsRef.current?.close(); clearInterval(elapsedTimerRef.current) }
   }, [])
 
   const rawJson = {
@@ -481,7 +557,84 @@ function InferenceConsole({ inference, selectedModel, onModelChange }) {
         <div style={{ color: '#f59e0b', fontSize: '0.8rem', padding: '0.75rem',
                       background: '#f59e0b11', border: '1px solid #f59e0b33',
                       borderRadius: 8, marginBottom: '0.75rem' }}>
-          ⚠ Connect a backend above to run inference
+          Connect a backend above to run inference
+        </div>
+      )}
+
+      {/* Preflight warning */}
+      {preflightResult && !running && (
+        <div style={{
+          padding: '0.6rem 0.85rem', borderRadius: 8, marginBottom: '0.75rem',
+          fontSize: '0.78rem',
+          background: preflightResult.status === 'fast' ? '#052e1644' : preflightResult.status === 'marginal' ? '#451a0344' : '#450a0a44',
+          border: `1px solid ${preflightResult.status === 'fast' ? '#10b98155' : preflightResult.status === 'marginal' ? '#f59e0b55' : '#ef444455'}`,
+          color: preflightResult.status === 'fast' ? '#10b981' : preflightResult.status === 'marginal' ? '#f59e0b' : '#ef4444',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>{preflightResult.message}</span>
+            <span style={{ fontFamily: 'monospace', fontWeight: 700, marginLeft: 12 }}>
+              Est: {preflightResult.estimated_tps} tok/sec
+            </span>
+          </div>
+          {preflightResult.status === 'slow' && (
+            <div style={{ marginTop: 4, fontSize: '0.72rem', opacity: 0.85 }}>
+              {preflightResult.recommendation}
+              <button onClick={() => { setModel('tinyllama:latest'); onModelChange?.('tinyllama:latest') }}
+                      style={{ marginLeft: 8, color: '#00d4ff', textDecoration: 'underline',
+                               background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.72rem' }}>
+                Switch to tinyllama
+              </button>
+            </div>
+          )}
+          <div style={{ marginTop: 4, fontSize: '0.68rem', opacity: 0.6, fontFamily: 'monospace' }}>
+            Free RAM: {preflightResult.free_ram_mb}MB &nbsp;|&nbsp;
+            Model: {preflightResult.model_size_mb}MB &nbsp;|&nbsp;
+            KV cache: {preflightResult.kv_cache_mb}MB &nbsp;|&nbsp;
+            Context: {preflightResult.safe_ctx} tokens
+          </div>
+        </div>
+      )}
+
+      {/* Phase indicator */}
+      {inferencePhase && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: '0.75rem' }}>
+          {inferencePhase === 'loading_model' && (
+            <div style={{ color: '#f59e0b', fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: '1.1rem' }}>⏳</span>
+              <div>
+                <div style={{ fontWeight: 600 }}>Loading model into virtual VRAM...</div>
+                <div style={{ fontSize: '0.7rem', opacity: 0.7 }}>
+                  {(elapsedMs / 1000).toFixed(1)}s elapsed — first run takes 5–30 seconds, subsequent runs are instant
+                </div>
+              </div>
+            </div>
+          )}
+          {inferencePhase === 'generating' && (
+            <div style={{ color: '#00d4ff', fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: '1.1rem', animation: 'pulse 1s infinite' }}>⚡</span>
+              <div>
+                <div style={{ fontWeight: 600 }}>
+                  Generating... {metrics?.currentTps?.toFixed(1) || '0.0'} tok/sec
+                </div>
+                <div style={{ fontSize: '0.7rem', opacity: 0.7 }}>
+                  {metrics?.totalTokens || 0} tokens &nbsp;·&nbsp; {(elapsedMs / 1000).toFixed(1)}s elapsed
+                </div>
+              </div>
+            </div>
+          )}
+          {inferencePhase === 'done' && (
+            <div style={{ color: '#10b981', fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: '1.1rem' }}>✓</span>
+              <div>
+                <div style={{ fontWeight: 600 }}>
+                  Complete — {metrics?.totalTokens || 0} tokens in {(elapsedMs / 1000).toFixed(1)}s
+                </div>
+                <div style={{ fontSize: '0.7rem', opacity: 0.7 }}>
+                  Average: {metrics?.avgTps || '0.0'} tok/sec
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -489,7 +642,7 @@ function InferenceConsole({ inference, selectedModel, onModelChange }) {
         <div style={{ color: '#ef4444', fontSize: '0.8rem', padding: '0.75rem',
                       background: '#ef444411', border: '1px solid #ef444433',
                       borderRadius: 8, marginBottom: '0.75rem' }}>
-          ✗ {error}
+          {error}
         </div>
       )}
 
@@ -719,8 +872,8 @@ export default function LLMInference({ telemetry }) {
   const [selectedModel, setSelectedModel] = useState('')
   const inference = telemetry?.inference || {}
   const memory = telemetry?.memory || {}
+  const systemRam = telemetry?.system_ram
 
-  // Enrich inference with memory data for sub-panels
   const enrichedInference = {
     ...inference,
     memory: {
@@ -732,12 +885,29 @@ export default function LLMInference({ telemetry }) {
     },
   }
 
+  // Auto-select best model based on free RAM when models load
+  const models = enrichedInference?.available_models || []
+  const freeRamMB = systemRam?.available_mb || 1500
+  useEffect(() => {
+    if (selectedModel || models.length === 0) return
+    const comfortable = [...models]
+      .filter(m => (m.size_mb || 0) < freeRamMB * 0.7)
+      .sort((a, b) => b.size_mb - a.size_mb)
+    if (comfortable.length > 0) {
+      setSelectedModel(comfortable[0].name)
+    } else {
+      const smallest = [...models].sort((a, b) => a.size_mb - b.size_mb)[0]
+      if (smallest) setSelectedModel(smallest.name)
+    }
+  }, [models.length, freeRamMB])
+
   return (
     <div className="flex flex-col gap-4">
       <BackendConnector
         inference={enrichedInference}
         onModelSelect={setSelectedModel}
         onConnected={() => {}}
+        systemRam={systemRam}
       />
       <InferenceConsole
         inference={enrichedInference}

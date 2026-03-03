@@ -24,7 +24,7 @@ cd /d "%~dp0"
 
 REM --- Start backend in separate window ---
 echo [3/4] Starting backend server...
-start "SynthGPU Backend - http://localhost:8000" cmd /k "cd /d "%~dp0backend" && uvicorn main:app --host 0.0.0.0 --port 8000"
+start "SynthGPU Backend - http://localhost:8000" cmd /k "set PYTHONPATH=%~dp0backend;%~dp0 && cd /d "%~dp0backend" && uvicorn main:app --host 0.0.0.0 --port 8000"
 
 REM --- Open browser ---
 echo [4/4] Opening browser in 4 seconds...

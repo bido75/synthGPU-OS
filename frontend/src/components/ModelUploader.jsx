@@ -41,21 +41,21 @@ export default function ModelUploader() {
     setRunning(true)
     setError(null)
 
-    const inputShape = model.inputs?.[0]?.shape?.map(d =>
-      typeof d === 'number' ? d : (d === null || d === 'batch_size') ? 1 : parseInt(d) || 1
-    ) || [1, 3, 224, 224]
-
     try {
       const resp = await fetch(`/api/model/${model.model_id}/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input_shape: inputShape, dtype: 'float32' }),
+        body: JSON.stringify({ input_shape: [1], dtype: 'float32' }),
       })
-      if (!resp.ok) {
-        const err = await resp.json()
-        throw new Error(err.detail || 'Inference failed')
+      let data
+      const ct = resp.headers.get('content-type') || ''
+      if (ct.includes('application/json')) {
+        data = await resp.json()
+      } else {
+        const text = await resp.text()
+        throw new Error(`Server error (${resp.status}): ${text.slice(0, 120)}`)
       }
-      const data = await resp.json()
+      if (!resp.ok) throw new Error(data.detail || 'Inference failed')
       setResult(data)
     } catch (e) {
       setError(e.message)

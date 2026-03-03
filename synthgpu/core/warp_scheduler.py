@@ -173,6 +173,20 @@ class WarpScheduler:
 
         return np.concatenate(results, axis=0)
 
+    def record_external_warps(self, count: int, exec_time_ms: float) -> None:
+        """
+        Record warp activity dispatched outside dispatch_kernel().
+        Called by the CUDA shim bridge for cuBLAS/cuDNN operations
+        so that telemetry stays accurate regardless of call path.
+
+        Args:
+            count:        Number of warps that executed
+            exec_time_ms: Total execution time in milliseconds
+        """
+        with self._lock:
+            self._warps_executed += count
+            self._total_exec_time_ms += exec_time_ms
+
     def get_stats(self) -> dict:
         elapsed = time.perf_counter() - self._start_time
         return {

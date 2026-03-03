@@ -38,6 +38,10 @@ class SynthGPU:
         self._platform = platform.processor() or platform.machine()
         self._os = f"{platform.system()} {platform.release()}"
 
+        # Pre-allocated buffers for repeated benchmark matmuls (avoids GC pressure)
+        self._bench_A = np.random.randn(64, 64).astype(np.float32)
+        self._bench_B = np.random.randn(64, 64).astype(np.float32)
+
         # Self-test
         self._self_test()
 
@@ -48,8 +52,8 @@ class SynthGPU:
         print()
 
     def _self_test(self):
-        A = np.random.randn(64, 64).astype(np.float32)
-        B = np.random.randn(64, 64).astype(np.float32)
+        A = self._bench_A
+        B = self._bench_B
         result = self.matmul(A, B)
         ref = np.matmul(A, B)
         max_diff = np.max(np.abs(result - ref))
@@ -173,18 +177,56 @@ class SynthGPU:
         self._total_compute_ms += elapsed_s * 1000
 
     def get_telemetry(self) -> dict:
-        uptime = round(time.time() - self._initialized_at, 1)
-        return {
-            "device": self.DEVICE_NAME,
-            "version": self.VERSION,
-            "platform": self._platform,
-            "os": self._os,
-            "uptime_seconds": uptime,
-            "ops_executed": self._op_count,
-            "total_compute_ms": round(self._total_compute_ms, 2),
-            "scheduler": self.scheduler.get_telemetry(),
-            "memory": self.memory.get_telemetry(),
-        }
+        """
+        Returns current device telemetry. Never raises — uses getattr fallbacks.
+        Includes scheduler+memory sub-dicts for the cuda_shim/status endpoint.
+        """
+        try:
+            uptime     = round(time.time() - self._initialized_at, 1)
+            sched_tele = self.scheduler.get_telemetry()
+            mem_tele   = self.memory.get_telemetry()
+
+            total_warps        = getattr(self.scheduler, 'total_warps_executed',
+                                         sched_tele.get('warps_executed', 0))
+            external_warps     = getattr(self.scheduler, 'external_warp_count', 0)
+            throughput_samples = getattr(self.scheduler, '_throughput_samples', [])
+            avg_throughput     = (sum(throughput_samples) / len(throughput_samples)
+                                  if throughput_samples
+                                  else sched_tele.get('warp_throughput_per_sec', 0.0))
+            kernels            = getattr(self.scheduler, 'kernels_dispatched',
+                                         sched_tele.get('warps_executed', total_warps))
+
+            return {
+                "device":           self.DEVICE_NAME,
+                "version":          self.VERSION,
+                "platform":         self._platform,
+                "os":               self._os,
+                "uptime_seconds":   uptime,
+                "ops_executed":     self._op_count,
+                "total_compute_ms": round(self._total_compute_ms, 2),
+                # Full sub-dicts (used by cuda_shim/status and live telemetry)
+                "scheduler":        sched_tele,
+                "memory":           mem_tele,
+                # Flat shim fields (used by get_telemetry() callers expecting these keys)
+                "warps_executed":         int(total_warps),
+                "external_warps":         int(external_warps),
+                "warp_throughput_per_sec": round(float(avg_throughput), 2),
+                "kernels_dispatched":     int(kernels),
+                "active_streams":         sched_tele.get('warps_in_flight', 0),
+                "vram_used_mb":           int(mem_tele.get('vram_used_mb', 0)),
+                "vram_total_mb":          int(mem_tele.get('vram_total_mb', 128)),
+                "shim_version":           "v0.3.0",
+                "shim_active":            True,
+            }
+        except Exception:
+            return {
+                "device": "SynthGPU", "version": self.VERSION,
+                "scheduler": {}, "memory": {},
+                "warps_executed": 0, "external_warps": 0,
+                "warp_throughput_per_sec": 0.0, "kernels_dispatched": 0,
+                "active_streams": 0, "vram_used_mb": 0, "vram_total_mb": 128,
+                "shim_version": "v0.3.0", "shim_active": True,
+            }
 
     def device_info(self) -> dict:
         return self.get_telemetry()

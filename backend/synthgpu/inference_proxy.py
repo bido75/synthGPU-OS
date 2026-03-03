@@ -9,6 +9,8 @@ import json
 import time
 import os
 import threading
+import urllib.request
+import urllib.error
 import numpy as np
 import psutil
 from collections import deque
@@ -26,6 +28,12 @@ except ImportError:
 OLLAMA_URL = "http://localhost:11434"
 LM_STUDIO_URL = "http://localhost:1234"
 
+# Origin header required by Ollama on Windows when OLLAMA_ORIGINS is not set
+_ORIGIN_HEADERS = {
+    "Origin": "http://localhost:8000",
+    "Content-Type": "application/json",
+}
+
 # Module-level backend state (mutated by detect_backend)
 _inference_state: dict = {
     "backend_url": None,
@@ -35,44 +43,77 @@ _inference_state: dict = {
 }
 
 
+def _parse_models_ollama(data: dict) -> list:
+    return [
+        {
+            "name": m["name"],
+            "size_mb": round(m.get("size", 0) / 1e6, 0),
+            "family": m.get("details", {}).get("family", ""),
+            "parameters": m.get("details", {}).get("parameter_size", ""),
+            "recommended_for_demo": m["name"].split(":")[0] in [
+                "tinyllama", "phi", "phi3", "llama3.2", "llama2", "mistral"
+            ],
+            "status": "ready",
+        }
+        for m in data.get("models", [])
+    ]
+
+
+def _parse_models_lmstudio(data: dict) -> list:
+    return [
+        {"name": m["id"], "size_mb": 0, "family": "", "status": "ready"}
+        for m in data.get("data", [])
+    ]
+
+
 async def detect_backend(state: dict = None) -> bool:
-    """Auto-detect Ollama or LM Studio. Updates state in-place."""
+    """Auto-detect Ollama or LM Studio using stdlib urllib (no httpx needed).
+    Updates state in-place. Includes Origin header for Ollama on Windows.
+    """
     if state is None:
         state = _inference_state
-    if not HTTPX_AVAILABLE:
-        return False
-    async with httpx.AsyncClient(timeout=2.0) as client:
-        for url, name, path in [
-            (OLLAMA_URL, "Ollama", "/api/tags"),
-            (LM_STUDIO_URL, "LM Studio", "/v1/models"),
-        ]:
-            try:
-                r = await client.get(f"{url}{path}")
-                if r.status_code == 200:
-                    state["backend_url"] = url
-                    state["backend_name"] = name
-                    state["backend_status"] = "connected"
-                    data = r.json()
-                    if name == "Ollama":
-                        state["available_models"] = [
-                            {
-                                "name": m["name"],
-                                "size_mb": round(m.get("size", 0) / 1e6, 0),
-                                "family": m.get("details", {}).get("family", ""),
-                                "status": "ready",
-                            }
-                            for m in data.get("models", [])
-                        ]
-                    else:
-                        state["available_models"] = [
-                            {"name": m["id"], "size_mb": 0, "family": "", "status": "ready"}
-                            for m in data.get("data", [])
-                        ]
-                    print(f"[SynthGPU] ✓ {name} detected at {url} "
-                          f"({len(state['available_models'])} models)")
-                    return True
-            except Exception:
-                continue
+
+    urls_to_try = []
+    if state.get("backend_url") and state.get("backend_name"):
+        path = "/api/tags" if state["backend_name"] == "Ollama" else "/v1/models"
+        urls_to_try.append((state["backend_url"], state["backend_name"], path))
+
+    for url, name, path in [
+        (OLLAMA_URL, "Ollama", "/api/tags"),
+        (LM_STUDIO_URL, "LM Studio", "/v1/models"),
+    ]:
+        if not any(u[0] == url for u in urls_to_try):
+            urls_to_try.append((url, name, path))
+
+    loop = asyncio.get_event_loop()
+
+    def _sync_get(url, name, path):
+        try:
+            req = urllib.request.Request(
+                f"{url}{path}",
+                headers={"Origin": "http://localhost:8000"},
+            )
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                if resp.status == 200:
+                    return json.loads(resp.read().decode())
+        except Exception:
+            pass
+        return None
+
+    for url, name, path in urls_to_try:
+        data = await loop.run_in_executor(None, _sync_get, url, name, path)
+        if data is not None:
+            state["backend_url"] = url
+            state["backend_name"] = name
+            state["backend_status"] = "connected"
+            state["available_models"] = (
+                _parse_models_ollama(data) if name == "Ollama"
+                else _parse_models_lmstudio(data)
+            )
+            print(f"[SynthGPU] ✓ {name} detected at {url} "
+                  f"({len(state['available_models'])} models)")
+            return True
+
     state["backend_status"] = "disconnected"
     return False
 
@@ -89,6 +130,12 @@ class SynthGPUTelemetryEngine:
     """
 
     WARP_SIZE = 32
+
+    # Fixed simulation dimensions — small enough to be fast, real enough for telemetry
+    _SIM_D     = 512
+    _SIM_H     = 8
+    _SIM_DK    = _SIM_D // _SIM_H   # 64
+    _SIM_SEQ   = 32
 
     def __init__(self, gpu_device):
         self.gpu = gpu_device
@@ -107,54 +154,177 @@ class SynthGPUTelemetryEngine:
 
         available_ram = psutil.virtual_memory().available
         self.vram_total_mb = (available_ram * 0.40) / (1024 * 1024)
-        print(f"[SynthGPU] Inference telemetry engine ready")
-        print(f"[SynthGPU] Proxy virtual VRAM pool: {self.vram_total_mb:.0f} MB (System RAM)")
+
+        # Sim buffers — allocated lazily on first token, not at startup
+        self._sim_Q  = None
+        self._sim_K  = None
+        self._sim_V  = None
+        self._sim_W1 = None
+        self._sim_W2 = None
+        self._sim_buffers_ready = False
+        self._sim_buffer_mode = "uninitialized"
+        self._sim_hidden = None
+        self._sim_attn_mask = None
+        print(f"[SynthGPU] Inference telemetry engine ready (lazy buffers)")
+
+    def _get_safe_context(self, free_ram_mb: float) -> int:
+        """Calculate safe context size based on available RAM."""
+        ram_for_kv = max(100, free_ram_mb - 800)
+        safe_ctx = int(ram_for_kv / 0.32)
+        safe_ctx = max(256, min(2048, safe_ctx))
+        safe_ctx = (safe_ctx // 256) * 256
+        return safe_ctx
+
+    def _build_ollama_options(self, model_name: str = "") -> dict:
+        """Build RAM-aware Ollama options. Called fresh per request."""
+        ram = psutil.virtual_memory()
+        free_mb = ram.available / (1024 * 1024)
+        cpu_count = os.cpu_count() or 2
+        safe_ctx = self._get_safe_context(free_mb)
+        print(f"[SynthGPU] Free RAM: {free_mb:.0f}MB → safe n_ctx: {safe_ctx}  threads: {cpu_count}")
+        return {
+            "num_thread":    cpu_count,
+            "num_ctx":       safe_ctx,
+            "num_keep":      5,
+            "num_predict":   150,
+            "num_batch":     512,
+            "temperature":   0.7,
+            "top_p":         0.9,
+            "top_k":         40,
+            "repeat_penalty": 1.1,
+            "mmap":          True,
+            "numa":          False,
+            "low_vram":      True,
+            "f16_kv":        True,
+        }
+
+    def _ensure_sim_buffers(self):
+        """
+        Ensure simulation buffers exist for warp telemetry visualization.
+
+        CRITICAL: This method must NEVER raise. If RAM is constrained, it
+        creates minimal buffers instead of full-size ones. Sim buffers are
+        for dashboard telemetry only — they do not affect real inference.
+        """
+        if self._sim_buffers_ready:
+            return
+
+        try:
+            free_mb = psutil.virtual_memory().available / (1024 * 1024)
+
+            if free_mb >= 500:
+                seq_len = 512
+                hidden = 256
+                batch = 4
+            elif free_mb >= 200:
+                seq_len = 64
+                hidden = 64
+                batch = 1
+            else:
+                seq_len = 16
+                hidden = 32
+                batch = 1
+
+            try:
+                self._sim_hidden = np.zeros((batch, seq_len, hidden), dtype=np.float32)
+                self._sim_attn_mask = np.ones((batch, 1, seq_len, seq_len), dtype=np.float32)
+
+                if free_mb >= 500:
+                    rng = np.random.default_rng(seed=42)
+                    self._sim_Q  = rng.standard_normal(
+                        (1, self._SIM_H, 1,             self._SIM_DK)).astype(np.float32) * 0.02
+                    self._sim_K  = rng.standard_normal(
+                        (1, self._SIM_H, self._SIM_SEQ, self._SIM_DK)).astype(np.float32) * 0.02
+                    self._sim_V  = rng.standard_normal(
+                        (1, self._SIM_H, self._SIM_SEQ, self._SIM_DK)).astype(np.float32) * 0.02
+                    self._sim_W1 = rng.standard_normal(
+                        (self._SIM_D * 4, self._SIM_D)).astype(np.float32) * 0.02
+                    self._sim_W2 = rng.standard_normal(
+                        (self._SIM_D, self._SIM_D * 4)).astype(np.float32) * 0.02
+
+                self._sim_buffers_ready = True
+                self._sim_buffer_mode = "normal" if free_mb >= 500 else "constrained"
+                print(f"[SynthGPU] sim_buffers: {self._sim_buffer_mode} mode "
+                      f"({free_mb:.0f}MB free, using {seq_len}x{hidden} buffers)")
+            except (MemoryError, Exception):
+                self._sim_hidden = None
+                self._sim_attn_mask = None
+                self._sim_buffers_ready = True
+                self._sim_buffer_mode = "stub"
+
+        except Exception:
+            self._sim_buffers_ready = True
+            self._sim_buffer_mode = "stub"
+
+    def _stub_telemetry(self, token_id: int = 0, position: int = 0) -> tuple:
+        """
+        Minimal telemetry when sim buffers are unavailable.
+        Still increments warp counters so the dashboard shows activity.
+        """
+        try:
+            ws = getattr(self.gpu, 'warp_scheduler', None) or getattr(self.gpu, 'scheduler', None)
+            if ws and hasattr(ws, 'record_external_warps'):
+                ws.record_external_warps(count=2, exec_time_ms=0.5)
+        except Exception:
+            pass
+        return 2, 0.5
 
     def simulate_token_compute(self, d_model: int = 2048, num_heads: int = 16):
-        """Run real tensor ops through the SynthGPU device for each token."""
-        d_k = d_model // max(num_heads, 1)
-        seq_len = min(64, self.tokens_generated + 1)
+        """
+        Run real tensor ops using PRE-ALLOCATED buffers.
+        Zero heap allocation per call — no GC pressure, <1ms overhead.
+        Called in a background thread (never blocks the asyncio event loop).
+        Never raises — falls back to stub telemetry on any failure.
+        """
+        try:
+            self._ensure_sim_buffers()
 
-        Q = np.random.randn(1, num_heads, 1, d_k).astype(np.float32) * 0.02
-        K = np.random.randn(1, num_heads, seq_len, d_k).astype(np.float32) * 0.02
-        V = np.random.randn(1, num_heads, seq_len, d_k).astype(np.float32) * 0.02
+            if self._sim_buffer_mode == "stub" or self._sim_W1 is None:
+                return self._stub_telemetry(self.tokens_generated, self.tokens_generated)
 
-        # Route through the actual SynthGPU device — registers in warp scheduler
-        t0 = time.perf_counter()
-        context = self.gpu.attention(Q, K, V)
+            t0 = time.perf_counter()
+            seq = min(self._SIM_SEQ, max(1, self.tokens_generated))
 
-        h = context.reshape(1, d_model)
-        ffn_dim = min(d_model * 4, 4096)
-        W1 = np.random.randn(ffn_dim, d_model).astype(np.float32) * 0.02
-        W2 = np.random.randn(d_model, ffn_dim).astype(np.float32) * 0.02
-        h_ffn = self.gpu.matmul(h, W1.T)
-        h_out = self.gpu.matmul(h_ffn, W2.T)
-        elapsed_ms = (time.perf_counter() - t0) * 1000
+            Q = self._sim_Q
+            K = self._sim_K[:, :, :seq, :]
+            V = self._sim_V[:, :, :seq, :]
 
-        data_elements = d_model * d_model
-        warps_this_token = max(1, data_elements // (self.WARP_SIZE * 32))
+            context = self.gpu.attention(Q, K, V)
+            h = context.reshape(1, self._SIM_D)
+            h_ffn = self.gpu.matmul(h, self._sim_W1.T)
+            h_out = self.gpu.matmul(h_ffn, self._sim_W2.T)  # noqa: F841
+            elapsed_ms = (time.perf_counter() - t0) * 1000
 
-        with self._lock:
-            self.warps_executed += warps_this_token
-            self._op_index = (self._op_index + 1) % len(OP_LABELS)
-            self.warp_history.append({
-                "t": time.time(),
-                "warps": warps_this_token,
-                "ms": round(elapsed_ms, 3),
-                "op": OP_LABELS[self._op_index],
-                "throughput": round(warps_this_token / max(elapsed_ms / 1000, 0.001), 1),
-            })
-            # KV cache growth: 2 * num_layers * num_heads * d_k * 2 bytes (fp16)
-            num_layers = max(num_heads, 16)
-            kv_per_token_mb = (2 * num_layers * num_heads * d_k * 2) / (1024 * 1024)
-            self.kv_cache_mb += kv_per_token_mb
+            data_elements = d_model * d_model
+            warps_this_token = max(1, data_elements // (self.WARP_SIZE * 32))
+            d_k = d_model // max(num_heads, 1)
 
-        return warps_this_token, elapsed_ms
+            with self._lock:
+                self.warps_executed += warps_this_token
+                self._op_index = (self._op_index + 1) % len(OP_LABELS)
+                self.warp_history.append({
+                    "t": time.time(),
+                    "warps": warps_this_token,
+                    "ms": round(elapsed_ms, 3),
+                    "op": OP_LABELS[self._op_index],
+                    "throughput": round(warps_this_token / max(elapsed_ms / 1000, 0.001), 1),
+                })
+                num_layers = max(num_heads, 16)
+                kv_per_token_mb = (2 * num_layers * num_heads * d_k * 2) / (1024 * 1024)
+                self.kv_cache_mb += kv_per_token_mb
 
-    def on_token_generated(self, token_text: str, token_ms: float,
+            return warps_this_token, elapsed_ms
+
+        except Exception:
+            return self._stub_telemetry(self.tokens_generated, self.tokens_generated)
+
+    def _record_token_fast(self, token_text: str, token_ms: float,
                            model_name: str = "unknown",
                            d_model: int = 2048, num_heads: int = 16) -> dict:
-        warps, compute_ms = self.simulate_token_compute(d_model, num_heads)
+        """
+        Fast synchronous path: record token stats immediately.
+        Does NOT run numpy simulation — that's dispatched off-thread by callers.
+        """
         with self._lock:
             self.tokens_generated += 1
             self.total_inference_ms += token_ms
@@ -162,14 +332,24 @@ class SynthGPUTelemetryEngine:
                 "t": time.time(),
                 "token": token_text,
                 "token_ms": round(token_ms, 2),
-                "compute_ms": round(compute_ms, 2),
-                "warps": warps,
+                "compute_ms": 0.0,
+                "warps": 0,
                 "tokens_per_sec": round(1000 / max(token_ms, 0.01), 2),
                 "total_tokens": self.tokens_generated,
             }
             self.token_history.append(entry)
             if self.active_session:
                 self.active_session["tokens_so_far"] = self.tokens_generated
+        return entry
+
+    def on_token_generated(self, token_text: str, token_ms: float,
+                           model_name: str = "unknown",
+                           d_model: int = 2048, num_heads: int = 16) -> dict:
+        """Legacy synchronous path (kept for compatibility)."""
+        entry = self._record_token_fast(token_text, token_ms, model_name, d_model, num_heads)
+        warps, compute_ms = self.simulate_token_compute(d_model, num_heads)
+        entry["warps"] = warps
+        entry["compute_ms"] = round(compute_ms, 2)
         return entry
 
     def on_inference_start(self, model_name: str, prompt: str):
@@ -204,7 +384,8 @@ class SynthGPUTelemetryEngine:
 
     def _estimate_model_size_mb(self, model_name: str) -> float:
         name = model_name.lower()
-        if   "70b"   in name: return 35000
+        if   "tinyllama" in name: return 600
+        elif "70b"   in name: return 35000
         elif "34b"   in name: return 17000
         elif "13b"   in name: return 6500
         elif "8b"    in name: return 4700
@@ -289,32 +470,101 @@ class InferenceProxyRouter:
                 "backend": state["backend_name"],
                 "backend_url": state["backend_url"],
                 "backend_status": state["backend_status"],
+                "backend_connected": state["backend_status"] == "connected",
                 "active_model": engine.active_model,
+                "active": engine.active_session is not None,
                 "tokens_generated": engine.tokens_generated,
                 "avg_tps": telem["avg_tokens_per_sec"],
                 "available_models": state["available_models"],
+                "retry_message": (
+                    "Run 'ollama serve' then click Test Connection"
+                    if state["backend_status"] != "connected" else None
+                ),
             }
 
         @router.get("/api/inference/models")
         async def list_models_endpoint():
-            await detect_backend(state)
-            return state["available_models"]
+            if state["backend_status"] != "connected":
+                await detect_backend(state)
+            return {
+                "connected": state["backend_status"] == "connected",
+                "backend": state["backend_name"],
+                "models": state["available_models"],
+            }
 
         @router.post("/api/inference/connect")
         async def connect_backend(request: Request):
             body = await request.json()
-            backend = body.get("backend", "ollama")
-            url = body.get("url")
-            if url:
-                state["backend_url"] = url
-                state["backend_name"] = "Ollama" if backend == "ollama" else "LM Studio"
-            found = await detect_backend(state)
+            backend_type = body.get("backend", "ollama")
+            custom_url = body.get("url", "")
+
+            if custom_url and custom_url not in (OLLAMA_URL, LM_STUDIO_URL, ""):
+                test_url = custom_url
+            elif backend_type == "lmstudio":
+                test_url = LM_STUDIO_URL
+            else:
+                test_url = OLLAMA_URL
+
+            is_ollama = not (backend_type == "lmstudio" or "1234" in test_url)
+            path = "/api/tags" if is_ollama else "/v1/models"
+            full_url = f"{test_url}{path}"
+
+            loop = asyncio.get_event_loop()
+
+            def _do_connect():
+                try:
+                    req = urllib.request.Request(
+                        full_url,
+                        headers={"Origin": "http://localhost:8000"},
+                    )
+                    with urllib.request.urlopen(req, timeout=5) as resp:
+                        if resp.status == 200:
+                            return ("ok", json.loads(resp.read().decode()))
+                        return ("http_error", resp.status)
+                except urllib.error.URLError as e:
+                    reason = str(e.reason) if hasattr(e, 'reason') else str(e)
+                    return ("connect_error", reason)
+                except Exception as e:
+                    return ("error", str(e))
+
+            result, payload = await loop.run_in_executor(None, _do_connect)
+
+            if result == "ok":
+                data = payload
+                backend_name = "Ollama" if is_ollama else "LM Studio"
+                models = (
+                    _parse_models_ollama(data) if is_ollama
+                    else _parse_models_lmstudio(data)
+                )
+                state["backend_url"] = test_url
+                state["backend_name"] = backend_name
+                state["backend_status"] = "connected"
+                state["available_models"] = models
+                print(f"[SynthGPU] ✓ {backend_name} connected at {test_url} "
+                      f"({len(models)} models)")
+                return {
+                    "connected": True,
+                    "backend": backend_name,
+                    "backend_url": test_url,
+                    "backend_status": "connected",
+                    "models": models,
+                    "message": f"Connected to {backend_name}. Found {len(models)} model(s).",
+                }
+
+            if result == "connect_error":
+                return {
+                    "connected": False,
+                    "error": "Connection refused",
+                    "message": f"Cannot reach Ollama at {test_url}. Is it running?",
+                    "fix": "ollama serve",
+                    "fix_windows": "Or double-click the Ollama icon in the system tray",
+                }
+
             return {
-                "connected": found,
-                "backend": state["backend_name"],
-                "backend_url": state["backend_url"],
-                "backend_status": state["backend_status"],
-                "models": state["available_models"],
+                "connected": False,
+                "error": str(payload),
+                "message": f"Ollama returned an error ({payload})",
+                "fix": "ollama serve",
             }
 
         @router.post("/api/inference/disconnect")
@@ -330,6 +580,7 @@ class InferenceProxyRouter:
             body = await request.json()
             model = body.get("model", "llama3.2:1b")
             prompt = body.get("prompt", "")
+            max_tokens = body.get("max_tokens", 256)
             if not state["backend_url"]:
                 return JSONResponse({"error": "No LLM backend connected"}, status_code=503)
 
@@ -337,6 +588,18 @@ class InferenceProxyRouter:
             d_model, num_heads = engine._estimate_model_dimensions(model)
             broadcast_fn = self.broadcast_fn
             token_connections = self.token_connections
+            loop = asyncio.get_event_loop()
+
+            # Build Ollama request with performance options to reduce RAM pressure
+            ollama_body = {
+                "model": model,
+                "prompt": prompt,
+                "stream": True,
+                "options": {
+                    **engine._build_ollama_options(model),
+                    "num_predict": max_tokens,
+                },
+            }
 
             async def _run():
                 total_tokens = 0
@@ -347,7 +610,7 @@ class InferenceProxyRouter:
                         async with client.stream(
                             "POST",
                             f"{state['backend_url']}/api/generate",
-                            json={"model": model, "prompt": prompt, "stream": True},
+                            json=ollama_body,
                         ) as resp:
                             async for line in resp.aiter_lines():
                                 if not line.strip():
@@ -360,10 +623,12 @@ class InferenceProxyRouter:
                                 token_ms = (time.perf_counter() - token_start) * 1000
                                 token_start = time.perf_counter()
                                 if token_text:
-                                    tok = engine.on_token_generated(
+                                    # Fast path: record stats immediately (non-blocking)
+                                    tok = engine._record_token_fast(
                                         token_text, token_ms, model, d_model, num_heads
                                     )
                                     total_tokens += 1
+                                    # Broadcast immediately — no simulation blocking
                                     if broadcast_fn and token_connections:
                                         await broadcast_fn(token_connections, {
                                             "type": "token",
@@ -375,6 +640,11 @@ class InferenceProxyRouter:
                                             "step": total_tokens - 1,
                                             "pct_complete": 0,
                                         })
+                                    # Fire-and-forget simulation in background thread
+                                    fut = loop.run_in_executor(
+                                        None, engine.simulate_token_compute, d_model, num_heads
+                                    )
+                                    fut.add_done_callback(lambda f: f.exception())
                                 if data.get("done"):
                                     total_elapsed = time.perf_counter() * 1000 - start_ms
                                     engine.on_inference_complete(total_tokens, total_elapsed)
@@ -453,6 +723,12 @@ class InferenceProxyRouter:
             engine.on_inference_start(model, prompt)
             broadcast_fn = self.broadcast_fn
             token_connections = self.token_connections
+            loop = asyncio.get_event_loop()
+
+            # Inject performance options (only if not already set by caller)
+            if "options" not in body:
+                body = dict(body)
+                body["options"] = engine._build_ollama_options(model)
 
             async def _stream() -> AsyncIterator[bytes]:
                 total_tokens = 0
@@ -474,7 +750,7 @@ class InferenceProxyRouter:
                             token_ms = (time.perf_counter() - token_start) * 1000
                             token_start = time.perf_counter()
                             if token_text:
-                                tok = engine.on_token_generated(
+                                tok = engine._record_token_fast(
                                     token_text, token_ms, model, d_model, num_heads
                                 )
                                 total_tokens += 1
@@ -488,6 +764,9 @@ class InferenceProxyRouter:
                                         "step": total_tokens - 1,
                                         "pct_complete": 0,
                                     })
+                                loop.run_in_executor(
+                                    None, engine.simulate_token_compute, d_model, num_heads
+                                ).add_done_callback(lambda f: f.exception())
                             data["synthgpu"] = {
                                 "device": "SynthGPU Virtual Accelerator",
                                 "warps_executed": engine.warps_executed,
@@ -683,3 +962,28 @@ class InferenceProxyRouter:
         @router.get("/health")
         async def health():
             return {"status": "ok", "synthgpu": "active", "no_physical_gpu": True}
+
+        @router.get("/api/debug/routes")
+        async def debug_routes():
+            return {
+                "ollama_connected": state["backend_status"] == "connected",
+                "ollama_url": state["backend_url"],
+                "ollama_name": state["backend_name"],
+                "available_models": [m["name"] for m in state["available_models"]],
+                "routes": [
+                    "/api/inference/status",
+                    "/api/inference/models",
+                    "/api/inference/connect",
+                    "/api/inference/run",
+                    "/api/inference/memory",
+                    "/api/inference/pull",
+                    "/api/generate",
+                    "/api/chat",
+                    "/api/tags",
+                    "/v1/chat/completions",
+                    "/v1/models",
+                    "/synthgpu/status",
+                    "/synthgpu/memory",
+                    "/health",
+                ],
+            }

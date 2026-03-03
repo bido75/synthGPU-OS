@@ -8,6 +8,10 @@ import TokenGenerator from './components/TokenGenerator.jsx'
 import ModelUploader from './components/ModelUploader.jsx'
 import EconomicsPanel from './components/EconomicsPanel.jsx'
 import LLMInference from './components/LLMInference.jsx'
+import SystemRAMMonitor from './components/SystemRAMMonitor.jsx'
+import CudaShimStatus from './components/CudaShimStatus.jsx'
+import RAMMonitor from './components/RAMMonitor.jsx'
+import DemoReadyBadge from './components/DemoReadyBadge.jsx'
 
 const TABS = ['Dashboard', 'Benchmarks', 'Demo', 'ONNX Model', 'LLM Inference']
 
@@ -201,6 +205,7 @@ export default function App() {
           ) : (
             <button className="btn btn-primary" onClick={startDemoMode}>▶ Investor Demo</button>
           )}
+          <DemoReadyBadge />
         </div>
       </header>
 
@@ -285,8 +290,11 @@ export default function App() {
                              onNavigateToLLM={() => setTab('LLM Inference')} />
                 <MemoryGauge memory={mem} inference={inference} />
               </div>
+              <SystemRAMMonitor telemetry={telemetry} />
               <WarpMonitor scheduler={sched} inference={inference} />
+              <CudaShimStatus />
               <PerformanceChart data={chartData} />
+            <RAMMonitor />
             </div>
           )}
           {tab === 'Benchmarks' && <BenchmarkRunner />}
@@ -302,4 +310,4 @@ export default function App() {
       </div>
     </div>
   )
-}
+}

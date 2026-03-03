@@ -56,11 +56,17 @@ class Warp:
 class WarpScheduler:
     def __init__(self, num_compute_units: int = None):
         total_cores = os.cpu_count() or 4
-        self.num_compute_units = num_compute_units or max(1, total_cores - 2)
+        if num_compute_units is None:
+            # Leave 2 cores for OS + Ollama; never exceed 4 CUs on memory-constrained machines
+            available_for_compute = max(1, total_cores - 2)
+            self.num_compute_units = min(available_for_compute, 4)
+        else:
+            self.num_compute_units = num_compute_units
         self.executor = ThreadPoolExecutor(
             max_workers=self.num_compute_units,
-            thread_name_prefix="SynthGPU-CU"
+            thread_name_prefix="SynthGPU-CU",
         )
+        _warmup = list(self.executor.map(lambda _: None, range(self.num_compute_units)))
         self._lock = threading.Lock()
         self._warps_executed = 0
         self._warps_in_flight = 0
@@ -69,6 +75,13 @@ class WarpScheduler:
         self._warp_history: deque = deque(maxlen=100)
         self._last_throughput_check = time.perf_counter()
         self._warps_since_last_check = 0
+        # External warp tracking (called by CUDA shim bridge)
+        self.external_warp_count = 0
+        self.external_exec_time_ms = 0.0
+        self._throughput_samples: list = []
+        # Cumulative counters (read by get_telemetry + cuda_shim/status)
+        self.total_warps_executed = 0
+        self.kernels_dispatched   = 0
 
         print(f"[SynthGPU] WarpScheduler initialized")
         print(f"[SynthGPU] Compute Units: {self.num_compute_units} (of {total_cores} CPU cores)")
@@ -114,6 +127,7 @@ class WarpScheduler:
                 self._warps_in_flight -= 1
                 self._warps_since_last_check += 1
                 self._total_exec_time_ms += warp.exec_time_ms
+                self.total_warps_executed += 1
                 now = time.perf_counter()
                 elapsed = now - self._last_throughput_check
                 if elapsed >= 0.2:
@@ -128,7 +142,24 @@ class WarpScheduler:
                     self._warps_since_last_check = 0
                     self._last_throughput_check = now
 
+        with self._lock:
+            self.kernels_dispatched += 1
         return np.concatenate(results, axis=0)
+
+    def record_external_warps(self, count: int, exec_time_ms: float) -> None:
+        """
+        Called by the CUDA shim bridge to register warp executions that happened
+        outside the Python scheduler (e.g., from the C shared library via ctypes).
+        """
+        with self._lock:
+            self._warps_executed += count
+            self.external_warp_count += count
+            self.external_exec_time_ms += exec_time_ms
+            if exec_time_ms > 0:
+                throughput = (count / exec_time_ms) * 1000
+                self._throughput_samples.append(throughput)
+                if len(self._throughput_samples) > 50:
+                    self._throughput_samples.pop(0)
 
     def get_telemetry(self) -> dict:
         with self._lock:
@@ -149,6 +180,9 @@ class WarpScheduler:
                 "utilization_pct": utilization,
                 "uptime_seconds": round(elapsed, 2),
                 "warp_history": list(self._warp_history),
+                "kernels_dispatched": self.kernels_dispatched,
+                "total_warps_executed": self.total_warps_executed,
+                "external_warp_count": self.external_warp_count,
             }
 
     def get_stats(self) -> dict:
