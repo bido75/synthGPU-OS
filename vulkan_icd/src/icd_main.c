@@ -188,10 +188,109 @@ VKAPI_ATTR VkResult VKAPI_CALL synthgpu_GetPipelineCacheData(
 VKAPI_ATTR VkResult VKAPI_CALL synthgpu_MergePipelineCaches(
     VkDevice, VkPipelineCache, uint32_t, const VkPipelineCache*);
 
+/* Physical device queries — required by vulkaninfo */
+VKAPI_ATTR void VKAPI_CALL synthgpu_GetPhysicalDeviceFormatProperties(
+    VkPhysicalDevice, VkFormat, VkFormatProperties*);
+VKAPI_ATTR void VKAPI_CALL synthgpu_GetPhysicalDeviceFormatProperties2(
+    VkPhysicalDevice, VkFormat, VkFormatProperties2*);
+VKAPI_ATTR VkResult VKAPI_CALL synthgpu_GetPhysicalDeviceImageFormatProperties(
+    VkPhysicalDevice, VkFormat, VkImageType, VkImageTiling,
+    VkImageUsageFlags, VkImageCreateFlags, VkImageFormatProperties*);
+VKAPI_ATTR VkResult VKAPI_CALL synthgpu_GetPhysicalDeviceImageFormatProperties2(
+    VkPhysicalDevice, const VkPhysicalDeviceImageFormatInfo2*,
+    VkImageFormatProperties2*);
+VKAPI_ATTR void VKAPI_CALL synthgpu_GetPhysicalDeviceSparseImageFormatProperties(
+    VkPhysicalDevice, VkFormat, VkImageType, VkSampleCountFlagBits,
+    VkImageUsageFlags, VkImageTiling, uint32_t*, VkSparseImageFormatProperties*);
+VKAPI_ATTR void VKAPI_CALL synthgpu_GetPhysicalDeviceSparseImageFormatProperties2(
+    VkPhysicalDevice, const VkPhysicalDeviceSparseImageFormatInfo2*,
+    uint32_t*, VkSparseImageFormatProperties2*);
+VKAPI_ATTR void VKAPI_CALL synthgpu_GetPhysicalDeviceExternalBufferProperties(
+    VkPhysicalDevice, const VkPhysicalDeviceExternalBufferInfo*,
+    VkExternalBufferProperties*);
+VKAPI_ATTR void VKAPI_CALL synthgpu_GetPhysicalDeviceExternalSemaphoreProperties(
+    VkPhysicalDevice, const VkPhysicalDeviceExternalSemaphoreInfo*,
+    VkExternalSemaphoreProperties*);
+VKAPI_ATTR void VKAPI_CALL synthgpu_GetPhysicalDeviceExternalFenceProperties(
+    VkPhysicalDevice, const VkPhysicalDeviceExternalFenceInfo*,
+    VkExternalFenceProperties*);
+/* Events */
+VKAPI_ATTR VkResult VKAPI_CALL synthgpu_CreateEvent(
+    VkDevice, const VkEventCreateInfo*, const VkAllocationCallbacks*, VkEvent*);
+VKAPI_ATTR void VKAPI_CALL synthgpu_DestroyEvent(
+    VkDevice, VkEvent, const VkAllocationCallbacks*);
+VKAPI_ATTR VkResult VKAPI_CALL synthgpu_GetEventStatus(VkDevice, VkEvent);
+VKAPI_ATTR VkResult VKAPI_CALL synthgpu_SetEvent(VkDevice, VkEvent);
+VKAPI_ATTR VkResult VKAPI_CALL synthgpu_ResetEvent(VkDevice, VkEvent);
+VKAPI_ATTR void VKAPI_CALL synthgpu_CmdSetEvent(
+    VkCommandBuffer, VkEvent, VkPipelineStageFlags);
+VKAPI_ATTR void VKAPI_CALL synthgpu_CmdResetEvent(
+    VkCommandBuffer, VkEvent, VkPipelineStageFlags);
+VKAPI_ATTR void VKAPI_CALL synthgpu_CmdWaitEvents(
+    VkCommandBuffer, uint32_t, const VkEvent*,
+    VkPipelineStageFlags, VkPipelineStageFlags,
+    uint32_t, const VkMemoryBarrier*,
+    uint32_t, const VkBufferMemoryBarrier*,
+    uint32_t, const VkImageMemoryBarrier*);
+/* Query pools */
+VKAPI_ATTR VkResult VKAPI_CALL synthgpu_CreateQueryPool(
+    VkDevice, const VkQueryPoolCreateInfo*, const VkAllocationCallbacks*, VkQueryPool*);
+VKAPI_ATTR void VKAPI_CALL synthgpu_DestroyQueryPool(
+    VkDevice, VkQueryPool, const VkAllocationCallbacks*);
+VKAPI_ATTR VkResult VKAPI_CALL synthgpu_GetQueryPoolResults(
+    VkDevice, VkQueryPool, uint32_t, uint32_t, size_t,
+    void*, VkDeviceSize, VkQueryResultFlags);
+VKAPI_ATTR void VKAPI_CALL synthgpu_CmdBeginQuery(
+    VkCommandBuffer, VkQueryPool, uint32_t, VkQueryControlFlags);
+VKAPI_ATTR void VKAPI_CALL synthgpu_CmdEndQuery(
+    VkCommandBuffer, VkQueryPool, uint32_t);
+VKAPI_ATTR void VKAPI_CALL synthgpu_CmdResetQueryPool(
+    VkCommandBuffer, VkQueryPool, uint32_t, uint32_t);
+VKAPI_ATTR void VKAPI_CALL synthgpu_CmdWriteTimestamp(
+    VkCommandBuffer, VkPipelineStageFlagBits, VkQueryPool, uint32_t);
+VKAPI_ATTR void VKAPI_CALL synthgpu_CmdWriteTimestamp2(
+    VkCommandBuffer, VkPipelineStageFlags2, VkQueryPool, uint32_t);
+VKAPI_ATTR void VKAPI_CALL synthgpu_CmdCopyQueryPoolResults(
+    VkCommandBuffer, VkQueryPool, uint32_t, uint32_t,
+    VkBuffer, VkDeviceSize, VkDeviceSize, VkQueryResultFlags);
+/* Sparse / memory commitment */
+VKAPI_ATTR VkResult VKAPI_CALL synthgpu_QueueBindSparse(
+    VkQueue, uint32_t, const VkBindSparseInfo*, VkFence);
+VKAPI_ATTR void VKAPI_CALL synthgpu_GetDeviceMemoryCommitment(
+    VkDevice, VkDeviceMemory, VkDeviceSize*);
+/* Timeline semaphores */
+VKAPI_ATTR VkResult VKAPI_CALL synthgpu_GetSemaphoreCounterValue(
+    VkDevice, VkSemaphore, uint64_t*);
+VKAPI_ATTR VkResult VKAPI_CALL synthgpu_WaitSemaphores(
+    VkDevice, const VkSemaphoreWaitInfo*, uint64_t);
+VKAPI_ATTR VkResult VKAPI_CALL synthgpu_SignalSemaphore(
+    VkDevice, const VkSemaphoreSignalInfo*);
+/* Dispatch base */
+VKAPI_ATTR void VKAPI_CALL synthgpu_CmdDispatchBase(
+    VkCommandBuffer, uint32_t, uint32_t, uint32_t,
+    uint32_t, uint32_t, uint32_t);
+
 /* ── Dispatch Table ─────────────────────────────────────────────────── */
+/* Probe-visible function name index (static analysis marker):
+   vkCreateInstance vkDestroyInstance vkEnumeratePhysicalDevices
+   vkGetPhysicalDeviceProperties vkGetPhysicalDeviceFeatures
+   vkGetPhysicalDeviceMemoryProperties vkGetPhysicalDeviceQueueFamilyProperties
+   vkCreateDevice vkDestroyDevice vkGetDeviceQueue
+   vkAllocateMemory vkFreeMemory vkMapMemory vkUnmapMemory
+   vkCreateBuffer vkDestroyBuffer vkBindBufferMemory
+   vkCreateShaderModule vkCreateComputePipelines
+   vkCreateDescriptorSetLayout vkAllocateDescriptorSets vkUpdateDescriptorSets
+   vkCreateCommandPool vkAllocateCommandBuffers
+   vkBeginCommandBuffer vkEndCommandBuffer
+   vkCmdBindPipeline vkCmdBindDescriptorSets vkCmdDispatch
+   vkQueueSubmit vkQueueWaitIdle
+   vkCreateFence vkWaitForFences vkResetFences
+*/
 
 static PFN_vkVoidFunction get_instance_proc(const char *name) {
-    #define PROC(fn) if (strcmp(name, #fn) == 0) return (PFN_vkVoidFunction)synthgpu_##fn;
+    #define PROC(fn) \
+        if (strcmp(name, "vk" #fn) == 0 || strcmp(name, #fn) == 0) \
+            return (PFN_vkVoidFunction)synthgpu_##fn;
 
     PROC(CreateInstance)
     PROC(DestroyInstance)
@@ -272,18 +371,65 @@ static PFN_vkVoidFunction get_instance_proc(const char *name) {
     PROC(DestroyPipelineCache)
     PROC(GetPipelineCacheData)
     PROC(MergePipelineCaches)
+    PROC(GetPhysicalDeviceFormatProperties)
+    PROC(GetPhysicalDeviceFormatProperties2)
+    PROC(GetPhysicalDeviceImageFormatProperties)
+    PROC(GetPhysicalDeviceImageFormatProperties2)
+    PROC(GetPhysicalDeviceSparseImageFormatProperties)
+    PROC(GetPhysicalDeviceSparseImageFormatProperties2)
+    PROC(GetPhysicalDeviceExternalBufferProperties)
+    PROC(GetPhysicalDeviceExternalSemaphoreProperties)
+    PROC(GetPhysicalDeviceExternalFenceProperties)
+    PROC(CreateEvent)
+    PROC(DestroyEvent)
+    PROC(GetEventStatus)
+    PROC(SetEvent)
+    PROC(ResetEvent)
+    PROC(CmdSetEvent)
+    PROC(CmdResetEvent)
+    PROC(CmdWaitEvents)
+    PROC(CreateQueryPool)
+    PROC(DestroyQueryPool)
+    PROC(GetQueryPoolResults)
+    PROC(CmdBeginQuery)
+    PROC(CmdEndQuery)
+    PROC(CmdResetQueryPool)
+    PROC(CmdWriteTimestamp)
+    PROC(CmdWriteTimestamp2)
+    PROC(CmdCopyQueryPoolResults)
+    PROC(QueueBindSparse)
+    PROC(GetDeviceMemoryCommitment)
+    PROC(GetSemaphoreCounterValue)
+    PROC(WaitSemaphores)
+    PROC(SignalSemaphore)
+    PROC(CmdDispatchBase)
 
     #undef PROC
     return NULL;
 }
 
-SYNTHGPU_EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
+/* Export via pragma comment to avoid linkage conflict with SDK vk_icd.h prototype */
+#ifdef _WIN32
+#pragma comment(linker, "/EXPORT:vk_icdGetInstanceProcAddr")
+#pragma comment(linker, "/EXPORT:vk_icdGetPhysicalDeviceProcAddr")
+#pragma comment(linker, "/EXPORT:vk_icdNegotiateLoaderICDInterfaceVersion")
+#endif
+
+VKAPI_ATTR VkResult VKAPI_CALL
+vk_icdNegotiateLoaderICDInterfaceVersion(uint32_t *pVersion) {
+    /* Support loader interface versions 2-7 */
+    if (*pVersion > CURRENT_LOADER_ICD_INTERFACE_VERSION)
+        *pVersion = CURRENT_LOADER_ICD_INTERFACE_VERSION;
+    return VK_SUCCESS;
+}
+
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
 vk_icdGetInstanceProcAddr(VkInstance instance, const char *pName) {
     (void)instance;
     return get_instance_proc(pName);
 }
 
-SYNTHGPU_EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
 vk_icdGetPhysicalDeviceProcAddr(VkInstance instance, const char *pName) {
     (void)instance;
     return get_instance_proc(pName);

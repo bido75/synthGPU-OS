@@ -81,8 +81,3 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL synthgpu_GetDeviceProcAddr(
     extern PFN_vkVoidFunction get_instance_proc(const char *name);
     return NULL; /* Resolved via vk_icdGetInstanceProcAddr */
 }
-
-VKAPI_ATTR VkResult VKAPI_CALL synthgpu_DeviceWaitIdle(VkDevice device) {
-    (void)device;
-    return VK_SUCCESS;
-}

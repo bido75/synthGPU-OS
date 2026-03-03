@@ -173,6 +173,11 @@ VKAPI_ATTR VkResult VKAPI_CALL synthgpu_QueueWaitIdle(VkQueue queue) {
     return VK_SUCCESS;
 }
 
+VKAPI_ATTR VkResult VKAPI_CALL synthgpu_DeviceWaitIdle(VkDevice device) {
+    (void)device;
+    return VK_SUCCESS;
+}
+
 /* ── Sync Objects ────────────────────────────────────────────────────── */
 
 VKAPI_ATTR VkResult VKAPI_CALL synthgpu_CreateFence(
