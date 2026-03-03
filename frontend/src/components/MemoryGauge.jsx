@@ -107,7 +107,7 @@ function ArcGauge({ pct, modelMb, kvMb, totalMb, inferenceActive }) {
 export default function MemoryGauge({ memory, inference }) {
   const used = memory?.vram_used_mb || 0
   const total = memory?.vram_total_mb || 4096
-  const free = memory?.vram_free_mb || total
+  const free = Math.max(0, memory?.vram_free_mb ?? total)
   const pct = memory?.utilization_pct || 0
   const allocs = memory?.num_allocations || 0
   const h2d = memory?.h2d_transferred_mb || 0

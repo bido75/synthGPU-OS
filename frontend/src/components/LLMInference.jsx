@@ -24,14 +24,20 @@ function BackendConnector({ inference, onModelSelect, onConnected, systemRam }) 
   const backendName = inference?.backend
   const models = inference?.available_models || []
   const backendUrl = inference?.backend_url || ''
-  const freeRamMB = systemRam?.available_mb || 1500
+
+  // Use total system RAM capacity for model fit — NOT available_mb.
+  // available_mb drops to ~440MB when a model is already loaded in Ollama,
+  // which incorrectly marks loaded models as "TOO LARGE".
+  // total_mb reflects the machine's actual capacity regardless of current usage.
+  const totalRamMB = systemRam?.total_mb || 8000
+  const freeRamMB = totalRamMB
 
   const getModelBadge = (model) => {
     const sizeMB = model.size_mb || 0
     if (sizeMB === 0) return null
-    if (sizeMB < freeRamMB * 0.7) return { label: 'FAST', color: '#10b981', bg: '#10b98122', tip: 'Fits in RAM' }
-    if (sizeMB < freeRamMB) return { label: 'MARGINAL', color: '#f59e0b', bg: '#f59e0b22', tip: 'May use swap' }
-    return { label: 'TOO LARGE', color: '#ef4444', bg: '#ef444422', tip: 'Will use disk swap' }
+    if (sizeMB < freeRamMB * 0.5) return { label: 'FAST', color: '#10b981', bg: '#10b98122', tip: 'Fits in RAM' }
+    if (sizeMB < freeRamMB * 0.8) return { label: 'MARGINAL', color: '#f59e0b', bg: '#f59e0b22', tip: 'May use swap' }
+    return { label: 'TOO LARGE', color: '#ef4444', bg: '#ef444422', tip: 'Exceeds system RAM' }
   }
 
   const testConnection = async () => {

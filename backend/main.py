@@ -954,6 +954,19 @@ async def vulkan_status():
     global vulkan_dispatch_count, vulkan_last_dispatch_ms, vulkan_icd_installed
     if not vulkan_icd_installed:
         vulkan_icd_installed = _check_vulkan_icd_installed()
+
+    import os, csv
+    telemetry_file = "synthgpu_vulkan_warps.tmp"
+    if os.path.exists(telemetry_file):
+        try:
+            with open(telemetry_file, "r") as f:
+                rows = [r for r in csv.reader(f) if r]
+                if rows:
+                    vulkan_dispatch_count = len(rows)
+                    vulkan_last_dispatch_ms = float(rows[-1][1]) if len(rows[-1]) > 1 else 0.0
+        except Exception:
+            pass
+
     return {
         "installed":          vulkan_icd_installed,
         "active":             vulkan_icd_installed,
@@ -963,9 +976,31 @@ async def vulkan_status():
         "api_version":        "1.3.0",
         "dispatch_count":     vulkan_dispatch_count,
         "last_dispatch_ms":   vulkan_last_dispatch_ms,
-        "vram_mb":            128,
-        "queue_families":     1,
-        "compute_queues":     4,
+        "vulkan_pool_mb":      128,
+        "vulkan_pool_used_mb": 0,
+        "vulkan_pool_free_mb": 128,
+        "queue_families":      1,
+        "compute_queues":      4,
+        "note": "vulkan_pool_mb is the virtual ICD pool, not system RAM",
+    }
+
+
+@app.get("/api/system/memory")
+async def system_memory():
+    """System RAM stats for inference feasibility.
+    Completely separate from the Vulkan ICD virtual VRAM pool."""
+    import psutil
+    mem = psutil.virtual_memory()
+    swap = psutil.swap_memory()
+    return {
+        "total_mb":            round(mem.total    / (1024 * 1024), 1),
+        "available_mb":        round(mem.available / (1024 * 1024), 1),
+        "used_mb":             round((mem.total - mem.available) / (1024 * 1024), 1),
+        "free_mb":             round(mem.free     / (1024 * 1024), 1),
+        "percent_used":        mem.percent,
+        "swap_used_mb":        round(swap.used    / (1024 * 1024), 1),
+        "swap_total_mb":       round(swap.total   / (1024 * 1024), 1),
+        "inference_headroom_mb": round((mem.available / (1024 * 1024)) - 512, 1),
     }
 
 

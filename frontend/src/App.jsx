@@ -102,6 +102,28 @@ export default function App() {
     return () => clearInterval(interval)
   }, [])
 
+  useEffect(() => {
+    const fetchSysRam = async () => {
+      try {
+        const res = await fetch('/api/system/memory')
+        const data = await res.json()
+        setTelemetry(prev => ({
+          ...prev,
+          system_ram: {
+            ...(prev?.system_ram || {}),
+            total_mb: data.total_mb,
+            available_mb: data.available_mb,
+            used_mb: data.used_mb,
+            percent_used: data.percent_used,
+          }
+        }))
+      } catch {}
+    }
+    fetchSysRam()
+    const interval = setInterval(fetchSysRam, 5000)
+    return () => clearInterval(interval)
+  }, [])
+
   const runDemoStep = (step) => {
     setDemoStep(step)
     setDemoText(DEMO_STEPS[step].text)

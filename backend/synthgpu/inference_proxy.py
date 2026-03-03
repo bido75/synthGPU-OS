@@ -681,12 +681,14 @@ class InferenceProxyRouter:
                     "used_mb": round(used, 1),
                     "model_weights_mb": round(engine.model_weights_mb, 1),
                     "kv_cache_mb": round(engine.kv_cache_mb, 2),
-                    "free_mb": round(engine.vram_total_mb - used, 1),
+                    "free_mb": max(0.0, round(engine.vram_total_mb - used, 1)),
                 },
                 "system_ram": {
                     "total_gb": round(ram.total / 1e9, 1),
                     "available_gb": round(ram.available / 1e9, 1),
                     "utilization_pct": ram.percent,
+                    "total_mb": round(ram.total / 1e6, 0),
+                    "available_mb": round(ram.available / 1e6, 0),
                 },
             }
 
@@ -942,12 +944,7 @@ class InferenceProxyRouter:
                     "used_mb": round(used, 1),
                     "model_weights_mb": round(engine.model_weights_mb, 1),
                     "kv_cache_mb": round(engine.kv_cache_mb, 2),
-                    "free_mb": round(engine.vram_total_mb - used, 1),
-                    "explanation": (
-                        "Virtual VRAM is carved from system RAM — NOT from disk. "
-                        "GPU VRAM is always RAM (GDDR6/HBM). Our vRAM pool is "
-                        "40% of available system RAM."
-                    ),
+                    "free_mb": max(0.0, round(engine.vram_total_mb - used, 1)),
                 },
                 "system_ram": {
                     "total_gb": round(ram.total / 1e9, 1),
