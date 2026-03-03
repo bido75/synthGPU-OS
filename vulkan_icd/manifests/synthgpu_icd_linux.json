@@ -1,0 +1,7 @@
+{
+    "file_format_version": "1.0.0",
+    "ICD": {
+        "library_path": "/usr/local/lib/synthgpu/libsynthgpu_vulkan_icd.so",
+        "api_version": "1.3.0"
+    }
+}
