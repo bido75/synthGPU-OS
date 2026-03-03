@@ -119,8 +119,101 @@ VKAPI_ATTR void VKAPI_CALL synthgpu_GetPhysicalDeviceProperties(
 }
 
 VKAPI_ATTR void VKAPI_CALL synthgpu_GetPhysicalDeviceProperties2(
-        VkPhysicalDevice physicalDevice, VkPhysicalDeviceProperties2 *pProperties) {
-    pProperties->properties = ((SynthGPU_PhysicalDevice_T*)physicalDevice)->props;
+    VkPhysicalDevice physicalDevice,
+    VkPhysicalDeviceProperties2 *pProperties)
+{
+    synthgpu_GetPhysicalDeviceProperties(physicalDevice, &pProperties->properties);
+
+    void *pNext = pProperties->pNext;
+    while (pNext != NULL) {
+        VkBaseOutStructure *base = (VkBaseOutStructure *)pNext;
+        switch (base->sType) {
+
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES: {
+            VkPhysicalDeviceVulkan11Properties *p =
+                (VkPhysicalDeviceVulkan11Properties *)base;
+            VkStructureType s = p->sType;
+            void *n = p->pNext;
+            memset(p, 0, sizeof(*p));
+            p->sType = s;
+            p->pNext = n;
+            p->subgroupSize = 1;
+            p->subgroupSupportedStages = VK_SHADER_STAGE_COMPUTE_BIT;
+            p->subgroupSupportedOperations = VK_SUBGROUP_FEATURE_BASIC_BIT;
+            break;
+        }
+
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES: {
+            VkPhysicalDeviceVulkan12Properties *p =
+                (VkPhysicalDeviceVulkan12Properties *)base;
+            VkStructureType s = p->sType;
+            void *n = p->pNext;
+            memset(p, 0, sizeof(*p));
+            p->sType = s;
+            p->pNext = n;
+            p->driverID = VK_DRIVER_ID_MESA_LLVMPIPE;
+            strncpy(p->driverName, "SynthGPU", VK_MAX_DRIVER_NAME_SIZE - 1);
+            strncpy(p->driverInfo, "SynthGPU Virtual Accelerator v0.3",
+                    VK_MAX_DRIVER_INFO_SIZE - 1);
+            p->conformanceVersion.major = 1;
+            p->conformanceVersion.minor = 3;
+            break;
+        }
+
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES: {
+            VkPhysicalDeviceVulkan13Properties *p =
+                (VkPhysicalDeviceVulkan13Properties *)base;
+            VkStructureType s = p->sType;
+            void *n = p->pNext;
+            memset(p, 0, sizeof(*p));
+            p->sType = s;
+            p->pNext = n;
+            p->maxInlineUniformBlockSize = 256;
+            p->maxPerStageDescriptorInlineUniformBlocks = 4;
+            break;
+        }
+
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES: {
+            VkPhysicalDeviceIDProperties *p =
+                (VkPhysicalDeviceIDProperties *)base;
+            VkStructureType s = p->sType;
+            void *n = p->pNext;
+            memset(p, 0, sizeof(*p));
+            p->sType = s;
+            p->pNext = n;
+            p->deviceUUID[0] = 0x53; p->deviceUUID[1] = 0x47;
+            p->deviceLUID[0] = 0x47; p->deviceLUID[1] = 0x53;
+            p->deviceLUIDValid = VK_FALSE;
+            break;
+        }
+
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES:
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_PROPERTIES:
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES:
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_POINT_CLIPPING_PROPERTIES:
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTIVIEW_PROPERTIES:
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROTECTED_MEMORY_PROPERTIES:
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES:
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FLOAT_CONTROLS_PROPERTIES:
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES:
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_STENCIL_RESOLVE_PROPERTIES:
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_FILTER_MINMAX_PROPERTIES:
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_PROPERTIES:
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INLINE_UNIFORM_BLOCK_PROPERTIES:
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TEXEL_BUFFER_ALIGNMENT_PROPERTIES:
+        case VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_PROPERTIES: {
+            VkStructureType s = base->sType;
+            void *n = base->pNext;
+            base->sType = s;
+            base->pNext = n;
+            break;
+        }
+
+        default:
+            break;
+        }
+        pNext = base->pNext;
+    }
 }
 
 VKAPI_ATTR void VKAPI_CALL synthgpu_GetPhysicalDeviceFeatures(
@@ -129,8 +222,21 @@ VKAPI_ATTR void VKAPI_CALL synthgpu_GetPhysicalDeviceFeatures(
 }
 
 VKAPI_ATTR void VKAPI_CALL synthgpu_GetPhysicalDeviceFeatures2(
-        VkPhysicalDevice physicalDevice, VkPhysicalDeviceFeatures2 *pFeatures) {
-    pFeatures->features = ((SynthGPU_PhysicalDevice_T*)physicalDevice)->features;
+    VkPhysicalDevice physicalDevice,
+    VkPhysicalDeviceFeatures2 *pFeatures)
+{
+    synthgpu_GetPhysicalDeviceFeatures(physicalDevice, &pFeatures->features);
+
+    void *pNext = pFeatures->pNext;
+    while (pNext != NULL) {
+        VkBaseOutStructure *base = (VkBaseOutStructure *)pNext;
+        VkStructureType s = base->sType;
+        void *n = base->pNext;
+        memset(base, 0, sizeof(VkBaseOutStructure));
+        base->sType = s;
+        base->pNext = n;
+        pNext = n;
+    }
 }
 
 VKAPI_ATTR void VKAPI_CALL synthgpu_GetPhysicalDeviceMemoryProperties(
@@ -140,10 +246,12 @@ VKAPI_ATTR void VKAPI_CALL synthgpu_GetPhysicalDeviceMemoryProperties(
 }
 
 VKAPI_ATTR void VKAPI_CALL synthgpu_GetPhysicalDeviceMemoryProperties2(
-        VkPhysicalDevice physicalDevice,
-        VkPhysicalDeviceMemoryProperties2 *pMemProperties) {
-    pMemProperties->memoryProperties =
-        ((SynthGPU_PhysicalDevice_T*)physicalDevice)->mem_props;
+    VkPhysicalDevice physicalDevice,
+    VkPhysicalDeviceMemoryProperties2 *pMemoryProperties)
+{
+    synthgpu_GetPhysicalDeviceMemoryProperties(
+        physicalDevice, &pMemoryProperties->memoryProperties);
+    (void)pMemoryProperties->pNext;
 }
 
 VKAPI_ATTR void VKAPI_CALL synthgpu_GetPhysicalDeviceQueueFamilyProperties(
