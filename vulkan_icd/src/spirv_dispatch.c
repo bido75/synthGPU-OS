@@ -29,6 +29,37 @@
 #define SPIRV_OP_EXECUTION_MODE          16u
 #define SPIRV_EXECUTION_MODE_LOCAL_SIZE  17u
 
+/*
+ * extract_local_size — parses OpExecutionMode LocalSize from SPIR-V bytecode.
+ * Called by pipeline.c at shader creation time, and as a fallback here.
+ *
+ * SPIR-V word layout: [magic][version][generator][bound][schema][instructions...]
+ * OpExecutionMode: opcode=16 (0x10), LocalSize mode=17 (0x11)
+ */
+static int extract_local_size(const uint32_t *code, size_t word_count,
+                               uint32_t *lx, uint32_t *ly, uint32_t *lz) {
+    *lx = 1; *ly = 1; *lz = 1;
+    if (word_count < 5 || code[0] != SPIRV_MAGIC) return -1;
+
+    size_t i = 5;  /* Skip header */
+    while (i < word_count) {
+        uint32_t word      = code[i];
+        uint32_t opcode    = word & 0xFFFF;
+        uint32_t word_len  = (word >> 16) & 0xFFFF;
+        if (word_len == 0 || i + word_len > word_count) break;
+
+        /* OpExecutionMode = 16, LocalSize mode = 17 */
+        if (opcode == 16 && word_len >= 6 && code[i + 2] == 17) {
+            *lx = code[i + 3];
+            *ly = (word_len > 4) ? code[i + 4] : 1;
+            *lz = (word_len > 5) ? code[i + 5] : 1;
+            return 0;
+        }
+        i += word_len;
+    }
+    return 0;  /* Default 1,1,1 is valid — not every shader uses LocalSize */
+}
+
 /* ── Minimal SPIR-V Interpreter ─────────────────────────────────────── */
 /*
  * Register file: 256 32-bit slots.

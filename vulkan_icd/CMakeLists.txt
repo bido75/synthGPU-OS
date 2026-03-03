@@ -18,6 +18,7 @@ set(ICD_SOURCES
     src/commands.c
     src/queue.c
     src/spirv_dispatch.c
+    src/stubs.c
     bridge/py_bridge.c
 )
 

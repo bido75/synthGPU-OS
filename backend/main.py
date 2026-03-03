@@ -152,6 +152,35 @@ proxy_router_obj: Optional[InferenceProxyRouter] = None
 demo_ready_achieved: bool = False   # flips True once; never resets
 inference_session_count: int = 0    # incremented after each successful run
 
+# Vulkan ICD telemetry state
+vulkan_dispatch_count: int = 0
+vulkan_last_dispatch_ms: float = 0.0
+vulkan_icd_installed: bool = False
+
+
+def _check_vulkan_icd_installed() -> bool:
+    """Check if SynthGPU Vulkan ICD is registered on this system."""
+    import platform as _platform
+    try:
+        if _platform.system() == "Windows":
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                r"SOFTWARE\Khronos\Vulkan\Drivers") as k:
+                i = 0
+                while True:
+                    try:
+                        name, _, _ = winreg.EnumValue(k, i)
+                        if "synthgpu" in name.lower():
+                            return True
+                        i += 1
+                    except OSError:
+                        break
+            return False
+        else:
+            return Path("/etc/vulkan/icd.d/synthgpu_icd.json").exists()
+    except Exception:
+        return False
+
 if INFERENCE_PROXY_AVAILABLE:
     inference_engine = SynthGPUTelemetryEngine(gpu_device=gpu)
     proxy_router_obj = InferenceProxyRouter(inference_engine)
@@ -915,6 +944,40 @@ async def cuda_shim_status():
             "vram_used_mb":       0,
             "vram_total_mb":      128,
         }
+
+
+# ── Vulkan ICD Endpoints ────────────────────────────────────────────────
+
+@app.get("/api/vulkan/status")
+async def vulkan_status():
+    """Returns SynthGPU Vulkan ICD installation and telemetry status."""
+    global vulkan_dispatch_count, vulkan_last_dispatch_ms, vulkan_icd_installed
+    if not vulkan_icd_installed:
+        vulkan_icd_installed = _check_vulkan_icd_installed()
+    return {
+        "installed":          vulkan_icd_installed,
+        "active":             vulkan_icd_installed,
+        "device_name":        "SynthGPU Virtual Accelerator v0.3",
+        "version":            "v0.3.0",
+        "vendor_id":          "0x5347",
+        "api_version":        "1.3.0",
+        "dispatch_count":     vulkan_dispatch_count,
+        "last_dispatch_ms":   vulkan_last_dispatch_ms,
+        "vram_mb":            128,
+        "queue_families":     1,
+        "compute_queues":     4,
+    }
+
+
+@app.post("/api/vulkan/record_dispatch")
+async def vulkan_record_dispatch(
+        group_x: int = 1, group_y: int = 1,
+        group_z: int = 1, exec_ms: float = 0.0):
+    """Called by spirv_dispatch.c via py_bridge to record Vulkan dispatches."""
+    global vulkan_dispatch_count, vulkan_last_dispatch_ms
+    vulkan_dispatch_count += group_x * group_y * group_z
+    vulkan_last_dispatch_ms = exec_ms
+    return {"ok": True, "total_dispatches": vulkan_dispatch_count}
 
 
 # ── Static Frontend Serving ────────────────────────────────────

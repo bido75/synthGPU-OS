@@ -39,6 +39,7 @@ export default function App() {
   const [demoMode, setDemoMode] = useState(false)
   const [demoStep, setDemoStep] = useState(0)
   const [demoText, setDemoText] = useState('')
+  const [vulkanStatus, setVulkanStatus] = useState({ installed: false, dispatch_count: 0 })
   const wsRef = useRef(null)
   const reconnectTimer = useRef(null)
   const demoTimer = useRef(null)
@@ -87,6 +88,19 @@ export default function App() {
       wsRef.current?.close()
     }
   }, [connectWS])
+
+  useEffect(() => {
+    const fetchVulkan = async () => {
+      try {
+        const res = await fetch('/api/vulkan/status')
+        const data = await res.json()
+        setVulkanStatus(data)
+      } catch {}
+    }
+    fetchVulkan()
+    const interval = setInterval(fetchVulkan, 5000)
+    return () => clearInterval(interval)
+  }, [])
 
   const runDemoStep = (step) => {
     setDemoStep(step)
@@ -206,6 +220,18 @@ export default function App() {
             <button className="btn btn-primary" onClick={startDemoMode}>▶ Investor Demo</button>
           )}
           <DemoReadyBadge />
+          {/* Vulkan ICD badge */}
+          <span style={{
+            padding: '3px 10px',
+            borderRadius: '4px',
+            fontSize: '11px',
+            fontWeight: 600,
+            background: vulkanStatus.installed ? 'rgba(167,139,250,0.15)' : 'rgba(255,255,255,0.05)',
+            border: `1px solid ${vulkanStatus.installed ? '#a78bfa' : 'rgba(255,255,255,0.1)'}`,
+            color: vulkanStatus.installed ? '#a78bfa' : '#4a6a8a',
+          }}>
+            {vulkanStatus.installed ? '\u2b21 Vulkan ICD Active' : '\u2b21 Vulkan ICD'}
+          </span>
         </div>
       </header>
 
@@ -253,6 +279,7 @@ export default function App() {
               {[
                 { val: sched.compute_units || '--', label: 'Compute Units' },
                 { val: (sched.warps_executed || 0).toLocaleString(), label: 'Warps Executed' },
+                { val: vulkanStatus.dispatch_count.toLocaleString(), label: 'Vulkan Dispatches', color: vulkanStatus.installed ? '#a78bfa' : '#4a6a8a' },
                 { val: `${mem.utilization_pct || 0}%`, label: 'vRAM Used', color: '#10b981' },
                 {
                   val: inference?.current_tokens_per_sec
@@ -310,4 +337,4 @@ export default function App() {
       </div>
     </div>
   )
-}
+}

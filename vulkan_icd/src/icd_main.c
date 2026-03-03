@@ -172,6 +172,22 @@ VKAPI_ATTR VkResult VKAPI_CALL synthgpu_CreatePipelineCache(
 VKAPI_ATTR void VKAPI_CALL synthgpu_DestroyPipelineCache(
     VkDevice, VkPipelineCache, const VkAllocationCallbacks*);
 
+/* Additional stubs for dispatch table completeness */
+VKAPI_ATTR VkResult VKAPI_CALL synthgpu_FreeDescriptorSets(
+    VkDevice, VkDescriptorPool, uint32_t, const VkDescriptorSet*);
+VKAPI_ATTR VkResult VKAPI_CALL synthgpu_ResetCommandPool(
+    VkDevice, VkCommandPool, VkCommandPoolResetFlags);
+VKAPI_ATTR void VKAPI_CALL synthgpu_CmdDispatchIndirect(
+    VkCommandBuffer, VkBuffer, VkDeviceSize);
+VKAPI_ATTR void VKAPI_CALL synthgpu_CmdUpdateBuffer(
+    VkCommandBuffer, VkBuffer, VkDeviceSize, VkDeviceSize, const void*);
+VKAPI_ATTR void VKAPI_CALL synthgpu_CmdPipelineBarrier2(
+    VkCommandBuffer, const VkDependencyInfo*);
+VKAPI_ATTR VkResult VKAPI_CALL synthgpu_GetPipelineCacheData(
+    VkDevice, VkPipelineCache, size_t*, void*);
+VKAPI_ATTR VkResult VKAPI_CALL synthgpu_MergePipelineCaches(
+    VkDevice, VkPipelineCache, uint32_t, const VkPipelineCache*);
+
 /* ── Dispatch Table ─────────────────────────────────────────────────── */
 
 static PFN_vkVoidFunction get_instance_proc(const char *name) {
@@ -222,6 +238,7 @@ static PFN_vkVoidFunction get_instance_proc(const char *name) {
     PROC(CreateDescriptorPool)
     PROC(DestroyDescriptorPool)
     PROC(AllocateDescriptorSets)
+    PROC(FreeDescriptorSets)
     PROC(UpdateDescriptorSets)
     PROC(CreateCommandPool)
     PROC(DestroyCommandPool)
@@ -230,15 +247,20 @@ static PFN_vkVoidFunction get_instance_proc(const char *name) {
     PROC(BeginCommandBuffer)
     PROC(EndCommandBuffer)
     PROC(ResetCommandBuffer)
+    PROC(ResetCommandPool)
     PROC(CmdBindPipeline)
     PROC(CmdBindDescriptorSets)
     PROC(CmdDispatch)
+    PROC(CmdDispatchIndirect)
     PROC(CmdCopyBuffer)
-    PROC(CmdPipelineBarrier)
     PROC(CmdFillBuffer)
+    PROC(CmdUpdateBuffer)
+    PROC(CmdPipelineBarrier)
+    PROC(CmdPipelineBarrier2)
     PROC(QueueSubmit)
     PROC(QueueSubmit2)
     PROC(QueueWaitIdle)
+    PROC(DeviceWaitIdle)
     PROC(CreateFence)
     PROC(DestroyFence)
     PROC(WaitForFences)
@@ -248,6 +270,8 @@ static PFN_vkVoidFunction get_instance_proc(const char *name) {
     PROC(DestroySemaphore)
     PROC(CreatePipelineCache)
     PROC(DestroyPipelineCache)
+    PROC(GetPipelineCacheData)
+    PROC(MergePipelineCaches)
 
     #undef PROC
     return NULL;

@@ -8,7 +8,12 @@
 VKAPI_ATTR VkResult VKAPI_CALL synthgpu_AllocateMemory(
         VkDevice device, const VkMemoryAllocateInfo *pAllocateInfo,
         const VkAllocationCallbacks *pAllocator, VkDeviceMemory *pMemory) {
-    (void)device; (void)pAllocator;
+    (void)pAllocator;
+    SynthGPU_Device_T *dev = (SynthGPU_Device_T*)device;
+
+    /* Check VRAM limit BEFORE allocating */
+    if (dev->vram_allocated + pAllocateInfo->allocationSize > dev->vram_pool_size)
+        return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 
     SynthGPU_DeviceMemory_T *mem =
         (SynthGPU_DeviceMemory_T*)SYNTHGPU_ALLOC(sizeof(*mem));
@@ -23,6 +28,9 @@ VKAPI_ATTR VkResult VKAPI_CALL synthgpu_AllocateMemory(
         return VK_ERROR_OUT_OF_DEVICE_MEMORY;
     }
 
+    /* Track allocated bytes against virtual VRAM budget */
+    dev->vram_allocated += pAllocateInfo->allocationSize;
+
     *pMemory = (VkDeviceMemory)(uintptr_t)mem;
     return VK_SUCCESS;
 }
@@ -30,9 +38,17 @@ VKAPI_ATTR VkResult VKAPI_CALL synthgpu_AllocateMemory(
 VKAPI_ATTR void VKAPI_CALL synthgpu_FreeMemory(
         VkDevice device, VkDeviceMemory memory,
         const VkAllocationCallbacks *pAllocator) {
-    (void)device; (void)pAllocator;
+    (void)pAllocator;
     if (memory == VK_NULL_HANDLE) return;
+    SynthGPU_Device_T *dev = (SynthGPU_Device_T*)device;
     SynthGPU_DeviceMemory_T *mem = (SynthGPU_DeviceMemory_T*)(uintptr_t)memory;
+
+    /* Decrement VRAM counter */
+    if (dev->vram_allocated >= mem->size)
+        dev->vram_allocated -= mem->size;
+    else
+        dev->vram_allocated = 0;
+
     if (mem->ptr) free(mem->ptr);
     SYNTHGPU_FREE(mem);
 }

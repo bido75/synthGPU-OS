@@ -17,10 +17,16 @@ static void init_physical_device(SynthGPU_Instance_T *instance) {
     VkPhysicalDeviceProperties *p = &g_physical_device.props;
     p->apiVersion    = VK_MAKE_API_VERSION(0, 1, 3, 0);
     p->driverVersion = VK_MAKE_API_VERSION(0, 0, 3, 0);
-    p->vendorID      = SYNTHGPU_VENDOR_ID;
-    p->deviceID      = SYNTHGPU_DEVICE_ID;
-    p->deviceType    = VK_PHYSICAL_DEVICE_TYPE_OTHER;
-    strncpy(p->deviceName, SYNTHGPU_DEVICE_NAME, VK_MAX_PHYSICAL_DEVICE_NAME_SIZE - 1);
+
+    /* Device identification — these exact strings appear in vulkaninfo */
+    strncpy(p->deviceName,
+            "SynthGPU Virtual Accelerator v0.3",
+            VK_MAX_PHYSICAL_DEVICE_NAME_SIZE - 1);
+    p->deviceName[VK_MAX_PHYSICAL_DEVICE_NAME_SIZE - 1] = '\0';
+
+    p->vendorID  = 0x5347;   /* 'SG' — SynthGPU vendor identifier */
+    p->deviceID  = 0x0003;
+    p->deviceType = VK_PHYSICAL_DEVICE_TYPE_OTHER;
 
     /* Pipeline cache UUID — unique per build */
     memset(p->pipelineCacheUUID, 0, VK_UUID_SIZE);

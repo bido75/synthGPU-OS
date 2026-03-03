@@ -1,5 +1,58 @@
 # SynthGPU Beta v0.2 — Virtual GPU Accelerator
 
+---
+
+## v0.3 — Vulkan ICD (OS Recognition Milestone)
+
+SynthGPU v0.3 implements a real Vulkan ICD (Installable Client Driver).
+After installation, `vulkaninfo` and any Vulkan application recognizes
+SynthGPU as a Vulkan 1.3 compute device.
+
+### What vulkaninfo shows after install
+```
+GPU0:
+  apiVersion    = 1.3.0
+  driverVersion = 0.3.0
+  vendorID      = 0x5347
+  deviceID      = 0x0003
+  deviceType    = OTHER
+  deviceName    = SynthGPU Virtual Accelerator v0.3
+```
+
+### Build & Install (Windows)
+```powershell
+# Prerequisites: CMake 3.20+, Vulkan SDK from https://vulkan.lunarg.com
+
+cd vulkan_icd
+New-Item -ItemType Directory -Force build; cd build
+cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
+cmake --build . --config Release
+cd ..\scripts
+
+# Copy vk_icd.h from Vulkan SDK (one-time):
+Copy-Item "$env:VULKAN_SDK\Include\vulkan\vk_icd.h" "..\include\vk_icd.h"
+
+# Run as Administrator:
+.\install_windows.bat
+vulkaninfo --summary | Select-String SynthGPU
+```
+
+### Build & Install (Linux)
+```bash
+cd vulkan_icd && mkdir build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc)
+cd .. && sudo scripts/install_linux.sh
+vulkaninfo --summary | grep SynthGPU
+```
+
+### Verify
+```powershell
+python vulkan_icd/tests/test_enumeration.py
+python vulkan_icd/tests/test_compute.py
+```
+
+---
+
 **"GPU compute on any CPU — no physical GPU required."**
 
 > *"The same way VMware made servers accessible to everyone, SynthGPU makes GPU compute accessible to everyone."*
