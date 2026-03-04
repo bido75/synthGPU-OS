@@ -592,7 +592,7 @@ def probe_P9(quick=False) -> PhaseReport:
             else fail("P9-icdd", "/etc/vulkan/icd.d/synthgpu_icd.json installed",
                 str(icd_d), "Run: sudo scripts/install_linux.sh"))
 
-    # vulkaninfo --summary
+    # vulkaninfo --summary (used for SynthGPU presence + basic property checks)
     rc, out, err = run(["vulkaninfo", "--summary"], timeout=20)
     full = out + err
     if "SynthGPU" in full:
@@ -603,16 +603,23 @@ def probe_P9(quick=False) -> PhaseReport:
             "SynthGPU not in vulkaninfo output",
             "Ensure build is complete and install_windows.bat / install_linux.sh was run as admin"))
 
+    # Run full vulkaninfo (without --summary) to get queue family details.
+    # --summary only prints basic device properties and never includes queue
+    # family information, so COMPUTE would never appear in that output.
+    rc_full, out_full, err_full = run(["vulkaninfo"], timeout=30)
+    full_detail = out_full + err_full
+
     # Check specific properties in vulkaninfo
     property_checks = [
-        ("0x5347",              "P9-vendorid",    "vendorID 0x5347 in vulkaninfo output"),
-        ("OTHER",               "P9-devtype",     "deviceType OTHER in vulkaninfo output"),
-        ("1.3.0",               "P9-apiversion",  "apiVersion 1.3.0 in vulkaninfo output"),
-        ("COMPUTE",             "P9-queue",       "COMPUTE queue family in vulkaninfo output"),
+        ("0x5347",              "P9-vendorid",    "vendorID 0x5347 in vulkaninfo output",    full),
+        ("OTHER",               "P9-devtype",     "deviceType OTHER in vulkaninfo output",    full),
+        ("1.3.0",               "P9-apiversion",  "apiVersion 1.3.0 in vulkaninfo output",   full),
+        # COMPUTE only appears in full vulkaninfo queue family section, not --summary
+        ("COMPUTE",             "P9-queue",       "COMPUTE queue family in vulkaninfo output", full_detail),
     ]
-    for pattern, rid, label in property_checks:
+    for pattern, rid, label, source in property_checks:
         if rc == 0:
-            r.results.append(ok(rid, label) if pattern in full
+            r.results.append(ok(rid, label) if pattern in source
                 else fail(rid, label, f"'{pattern}' not found in vulkaninfo output"))
         else:
             r.results.append(skip(rid, label, "vulkaninfo failed to run"))

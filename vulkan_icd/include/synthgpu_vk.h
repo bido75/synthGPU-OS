@@ -187,9 +187,5 @@ typedef struct SynthGPU_Semaphore_T {
 #define SET_LOADER_MAGIC(obj) \
     set_loader_magic_value((void*)(obj))
 
-/* ICD proc addr export */
-SYNTHGPU_EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
-vk_icdGetInstanceProcAddr(VkInstance instance, const char *pName);
-
-SYNTHGPU_EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
-vk_icdGetPhysicalDeviceProcAddr(VkInstance instance, const char *pName);
+/* vk_icdGetInstanceProcAddr and vk_icdGetPhysicalDeviceProcAddr are declared
+   by the Vulkan SDK vk_icd.h (included via icd_main.c). Do not redeclare. */

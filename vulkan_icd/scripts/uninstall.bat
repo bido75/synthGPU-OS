@@ -1,18 +1,40 @@
 @echo off
-setlocal
+setlocal EnableDelayedExpansion
 
-set ICD_DIR=%~dp0..
+:: ============================================================
+:: SynthGPU Vulkan ICD — Windows Uninstaller
+:: Must be run as Administrator.
+:: ============================================================
 
-:: Remove registry entry
-reg delete "HKLM\SOFTWARE\Khronos\Vulkan\Drivers" /f 2>nul
-echo [SynthGPU] Removed Vulkan ICD registry entries.
+set INSTALL_DIR=%ProgramFiles%\SynthGPU
+set JSON_DEST=%INSTALL_DIR%\synthgpu_icd_win64.json
 
-:: Remove installed manifest
-set JSON_DEST=%ICD_DIR%\build\synthgpu_icd_win64_installed.json
-if exist "%JSON_DEST%" (
-    del "%JSON_DEST%"
-    echo [SynthGPU] Removed manifest: %JSON_DEST%
+echo.
+echo  =====================================================
+echo   SynthGPU Vulkan ICD Uninstaller
+echo  =====================================================
+echo.
+
+net session >nul 2>&1
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] Must be run as Administrator.
+    pause
+    exit /b 1
+)
+
+:: Remove registry entries
+echo [SynthGPU] Removing Vulkan loader registry entry...
+reg delete "HKLM\SOFTWARE\Khronos\Vulkan\Drivers" /v "%JSON_DEST%" /f >nul 2>&1
+
+echo [SynthGPU] Removing uninstall entry...
+reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\SynthGPU-VulkanICD" /f >nul 2>&1
+
+:: Remove installed files
+echo [SynthGPU] Removing files from %INSTALL_DIR%...
+if exist "%INSTALL_DIR%" (
+    rmdir /s /q "%INSTALL_DIR%"
 )
 
 echo [SynthGPU] Uninstall complete.
+echo.
 endlocal
