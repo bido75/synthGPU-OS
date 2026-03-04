@@ -279,6 +279,8 @@ VKAPI_ATTR void VKAPI_CALL synthgpu_GetPhysicalDeviceQueueFamilyProperties2(
     VkQueueFamilyProperties props;
     uint32_t count = 1;
     synthgpu_GetPhysicalDeviceQueueFamilyProperties(physicalDevice, &count, &props);
+    pQueueFamilyProperties[0].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2;
+    pQueueFamilyProperties[0].pNext = NULL;
     pQueueFamilyProperties[0].queueFamilyProperties = props;
 }
 

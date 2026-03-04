@@ -76,8 +76,7 @@ VKAPI_ATTR void VKAPI_CALL synthgpu_GetDeviceQueue2(
 
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL synthgpu_GetDeviceProcAddr(
         VkDevice device, const char *pName) {
-    (void)device;
-    /* Re-use the same instance proc dispatch table */
-    extern PFN_vkVoidFunction get_instance_proc(const char *name);
-    return NULL; /* Resolved via vk_icdGetInstanceProcAddr */
+    extern VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(
+        VkInstance instance, const char *pName);
+    return vk_icdGetInstanceProcAddr(VK_NULL_HANDLE, pName);
 }
