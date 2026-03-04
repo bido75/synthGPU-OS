@@ -255,33 +255,47 @@ VKAPI_ATTR void VKAPI_CALL synthgpu_GetPhysicalDeviceMemoryProperties2(
 }
 
 VKAPI_ATTR void VKAPI_CALL synthgpu_GetPhysicalDeviceQueueFamilyProperties(
-        VkPhysicalDevice physicalDevice, uint32_t *pQueueFamilyPropertyCount,
-        VkQueueFamilyProperties *pQueueFamilyProperties) {
+    VkPhysicalDevice physicalDevice,
+    uint32_t *pQueueFamilyPropertyCount,
+    VkQueueFamilyProperties *pQueueFamilyProperties)
+{
     (void)physicalDevice;
-    if (!pQueueFamilyProperties) {
-        *pQueueFamilyPropertyCount = 1;
-        return;
+    if (pQueueFamilyPropertyCount) *pQueueFamilyPropertyCount = 1;
+    if (pQueueFamilyProperties) {
+        pQueueFamilyProperties[0].queueFlags =
+            VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT;
+        pQueueFamilyProperties[0].queueCount = 4;
+        pQueueFamilyProperties[0].timestampValidBits = 0;
+        pQueueFamilyProperties[0].minImageTransferGranularity = (VkExtent3D){1, 1, 1};
     }
-    if (*pQueueFamilyPropertyCount < 1) return;
-    /* One queue family: compute + transfer only (no graphics, no presentation) */
-    pQueueFamilyProperties[0].queueFlags =
-        VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT;
-    pQueueFamilyProperties[0].queueCount = 4;
-    pQueueFamilyProperties[0].timestampValidBits = 0;
-    pQueueFamilyProperties[0].minImageTransferGranularity = (VkExtent3D){1,1,1};
-    *pQueueFamilyPropertyCount = 1;
 }
 
 VKAPI_ATTR void VKAPI_CALL synthgpu_GetPhysicalDeviceQueueFamilyProperties2(
-        VkPhysicalDevice physicalDevice, uint32_t *pQueueFamilyPropertyCount,
-        VkQueueFamilyProperties2 *pQueueFamilyProperties) {
-    if (!pQueueFamilyProperties) { *pQueueFamilyPropertyCount = 1; return; }
-    VkQueueFamilyProperties props;
-    uint32_t count = 1;
-    synthgpu_GetPhysicalDeviceQueueFamilyProperties(physicalDevice, &count, &props);
-    pQueueFamilyProperties[0].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2;
-    pQueueFamilyProperties[0].pNext = NULL;
-    pQueueFamilyProperties[0].queueFamilyProperties = props;
+    VkPhysicalDevice physicalDevice,
+    uint32_t *pQueueFamilyPropertyCount,
+    VkQueueFamilyProperties2 *pQueueFamilyProperties)
+{
+    (void)physicalDevice;
+    if (pQueueFamilyPropertyCount) *pQueueFamilyPropertyCount = 1;
+    if (pQueueFamilyProperties) {
+        pQueueFamilyProperties[0].queueFamilyProperties.queueFlags =
+            VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT;
+        pQueueFamilyProperties[0].queueFamilyProperties.queueCount = 4;
+        pQueueFamilyProperties[0].queueFamilyProperties.timestampValidBits = 0;
+        pQueueFamilyProperties[0].queueFamilyProperties.minImageTransferGranularity =
+            (VkExtent3D){1, 1, 1};
+
+        void *pNext = pQueueFamilyProperties[0].pNext;
+        while (pNext != NULL) {
+            VkBaseOutStructure *base = (VkBaseOutStructure *)pNext;
+            VkStructureType s = base->sType;
+            void *n = base->pNext;
+            memset(base, 0, sizeof(VkBaseOutStructure));
+            base->sType = s;
+            base->pNext = n;
+            pNext = n;
+        }
+    }
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL synthgpu_EnumerateDeviceExtensionProperties(
