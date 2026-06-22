@@ -21,7 +21,12 @@ RUN for i in 1 2 3; do \
         && break || { echo "Attempt $i failed, retrying..."; sleep 5; }; \
     done \
     && rm -rf /var/lib/apt/lists/* \
-    && pip install --no-cache-dir numpy
+    && for i in 1 2 3; do \
+         pip install --index-url https://pypi.org/simple --retries 5 --timeout 120 --no-cache-dir numpy \
+         && break; \
+         if [ "$i" -eq 3 ]; then exit 1; fi; \
+         echo "pip attempt $i failed, retrying..."; sleep 10; \
+       done
 
 WORKDIR /build
 RUN mkdir -p /artifacts/vulkan /artifacts/cuda
@@ -88,8 +93,13 @@ COPY backend/ backend/
 COPY cuda_shim/ cuda_shim/
 COPY probe_v03.py .
 COPY requirements.txt .
-RUN pip install --retries 5 --timeout 60 -r requirements.txt && \
-    pip install --retries 5 --timeout 60 -r backend/requirements.txt && \
+RUN for i in 1 2 3; do \
+      pip install --index-url https://pypi.org/simple --retries 5 --timeout 120 -r requirements.txt \
+      && pip install --index-url https://pypi.org/simple --retries 5 --timeout 120 -r backend/requirements.txt \
+      && break; \
+      if [ "$i" -eq 3 ]; then exit 1; fi; \
+      echo "pip attempt $i failed, retrying..."; sleep 10; \
+    done && \
     pip cache purge
 
 # ── Copy built frontend ──────────────────────────────────────────────────

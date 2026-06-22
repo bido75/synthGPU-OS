@@ -3,7 +3,7 @@ param(
     [switch]$Uninstall,
     [switch]$NoOpen,
     [string]$Distro = "Ubuntu-24.04",
-    [string]$RepoUrl = "https://github.com/bido75/SynthGPU.git",
+    [string]$RepoUrl = "https://github.com/bido75/synthGPU-OS.git",
     [string]$Branch = "main"
 )
 
@@ -25,21 +25,52 @@ function Get-WslDistros {
     return @(($cleanOutput -split "`r?`n") | Where-Object { $_.Trim() })
 }
 
+function Get-WslVersion {
+    $output = ((& wsl.exe --list --verbose 2>$null) -join "`n") -replace "`0", ""
+    $escapedDistro = [regex]::Escape($Distro)
+    $match = [regex]::Match($output, "(?m)^\s*\*?\s*$escapedDistro\s+\S+\s+(\d+)\s*$")
+    if (-not $match.Success) { return $null }
+    return [int]$match.Groups[1].Value
+}
+
 function Invoke-WslRoot {
     param([string]$Command)
-    & wsl.exe -d $Distro -u root -- bash -lc $Command
-    if ($LASTEXITCODE -ne 0) {
-        throw "WSL command failed with exit code $LASTEXITCODE"
+    # Windows PowerShell 5.1 rewrites quotes in native-command arguments.
+    # Transport the script as base64 so Bash receives redirects, pipes, and
+    # nested quotes exactly as authored.
+    $encodedCommand = [Convert]::ToBase64String(
+        [Text.Encoding]::UTF8.GetBytes($Command)
+    )
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        # Native programs commonly use stderr for progress and informational
+        # messages. Judge success by their process exit code instead.
+        $ErrorActionPreference = "Continue"
+        & wsl.exe -d $Distro -u root -- bash -lc "echo $encodedCommand|base64 -d|env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin bash"
+        $wslExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+    if ($wslExitCode -ne 0) {
+        throw "WSL command failed with exit code $wslExitCode"
     }
 }
 
 function Get-LinuxInstallContext {
-    $command = 'u=$(getent passwd 1000 | cut -d: -f1); if [ -n "$u" ]; then h=$(getent passwd "$u" | cut -d: -f6); else u=root; h=/root; fi; printf "%s|%s" "$u" "$h"'
-    $context = & wsl.exe -d $Distro -u root -- bash -lc $command
+    # Avoid a pipe delimiter here: Windows PowerShell 5.1 can remove the
+    # surrounding quotes when forwarding this command through wsl.exe.
+    $command = 'u=$(getent passwd 1000 | cut -d: -f1); if [ -n "$u" ]; then h=$(getent passwd "$u" | cut -d: -f6); else u=root; h=/root; fi; printf "%s:%s" "$u" "$h"'
+    $encodedCommand = [Convert]::ToBase64String(
+        [Text.Encoding]::UTF8.GetBytes($command)
+    )
+    $context = & wsl.exe -d $Distro -u root -- bash -lc "echo $encodedCommand|base64 -d|env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin bash"
     if ($LASTEXITCODE -ne 0 -or -not $context) {
         throw "Could not determine the Ubuntu install user"
     }
-    $parts = (($context -join "") -replace "`0", "").Split("|", 2)
+    $parts = (($context -join "") -replace "`0", "").Split(":", 2)
+    if ($parts.Count -ne 2 -or -not $parts[0] -or -not $parts[1]) {
+        throw "Ubuntu install user context was malformed: $context"
+    }
     return @{ User = $parts[0]; Home = $parts[1]; Repo = "$($parts[1])/synthgpu" }
 }
 
@@ -88,6 +119,7 @@ if ($rebootRequired) {
 }
 
 Invoke-Checked "Checking WSL" { wsl.exe --version }
+Invoke-Checked "Setting WSL2 as the default" { wsl.exe --set-default-version 2 }
 $distros = Get-WslDistros
 if ($Distro -notin $distros) {
     Invoke-Checked "Installing $Distro" {
@@ -96,13 +128,19 @@ if ($Distro -notin $distros) {
     Write-Host "The distro was installed. Initializing it now; Windows may show a first-run prompt."
 }
 
+if ((Get-WslVersion) -ne 2) {
+    Invoke-Checked "Converting $Distro to WSL2" {
+        wsl.exe --set-version $Distro 2
+    }
+}
+
 Invoke-WslRoot "echo 'WSL2 alive'"
 $context = Get-LinuxInstallContext
 $linuxUser = $context.User
 $repo = $context.Repo
 
 Invoke-WslRoot "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl git"
-Invoke-WslRoot "if ! command -v docker >/dev/null 2>&1; then curl -fsSL https://get.docker.com -o /tmp/get-docker.sh && sh /tmp/get-docker.sh && rm -f /tmp/get-docker.sh; fi"
+Invoke-WslRoot 'docker_path=$(command -v docker 2>/dev/null || true); if [ -z "$docker_path" ] || [[ "$docker_path" == /mnt/* ]]; then install -m 0755 -d /etc/apt/keyrings && curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc && chmod a+r /etc/apt/keyrings/docker.asc && . /etc/os-release && printf "deb [arch=%s signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu %s stable\n" "$(dpkg --print-architecture)" "$VERSION_CODENAME" > /etc/apt/sources.list.d/docker.list && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; fi'
 if ($linuxUser -ne "root") {
     Invoke-WslRoot "usermod -aG docker '$linuxUser'"
 }
