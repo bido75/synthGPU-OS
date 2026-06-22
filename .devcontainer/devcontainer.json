@@ -1,0 +1,39 @@
+{
+  "name": "synthGPU-OS",
+  "image": "mcr.microsoft.com/devcontainers/python:1-3.11-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "version": "latest",
+      "dockerDashComposeVersion": "v2"
+    }
+  },
+  "forwardPorts": [8000, 5173],
+  "portsAttributes": {
+    "8000": {
+      "label": "SynthGPU API and dashboard",
+      "onAutoForward": "openPreview"
+    },
+    "5173": {
+      "label": "Vite development server",
+      "onAutoForward": "notify"
+    }
+  },
+  "postCreateCommand": "python -m pip install --upgrade pip && pip install -r backend/requirements.txt pytest ruff && cd frontend && npm ci",
+  "remoteEnv": {
+    "PYTHONPATH": "${containerWorkspaceFolder}/backend:${containerWorkspaceFolder}"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "charliermarsh.ruff",
+        "dbaeumer.vscode-eslint",
+        "ms-azuretools.vscode-docker"
+      ]
+    }
+  }
+}

@@ -1,0 +1,98 @@
+# =============================================================================
+# SynthGPU Hyper-Virtualized Docker Compose — Lazy VRAM + IPC Matrix
+# =============================================================================
+# Two containers share IPC namespace and UDS socket volume so the AI
+# workload can mmap the exact same /dev/shm pages as the hypervisor.
+#
+# The hypervisor boots instantly with a 0-byte file and grows it
+# incrementally on each cudaMalloc (Lazy VRAM Allocation).
+#
+# Usage:
+#   SYNTHGPU_VRAM_GB=2 docker compose -f docker-compose.hypervisor.yml up -d
+#   docker compose -f docker-compose.hypervisor.yml run ai-client-workload \
+#     python -c "import torch; print(torch.cuda.is_available())"
+# =============================================================================
+
+services:
+
+  # ── Control Plane: Python MMU Hypervisor ─────────────────────────
+  synthgpu-hypervisor:
+    build:
+      context: .
+      dockerfile: Dockerfile.hypervisor
+    container_name: synthgpu-hypervisor
+    hostname: hypervisor
+
+    # IPC mode must be "shareable" so the client can join us
+    ipc: shareable
+
+    # Shared memory: large enough for max VRAM pool
+    shm_size: ${SYNTHGPU_SHM_SIZE:-4gb}
+
+    volumes:
+      # UDS socket — both containers mount this exact volume
+      - vgpu-socket-dir:/tmp/vgpu
+      # Export the compiled .so for client consumption
+      - libsynthgpu:/usr/local/lib/synthgpu
+
+    environment:
+      - SYNTHGPU_VRAM_GB=${SYNTHGPU_VRAM_GB:-2}
+      - SYNTHGPU_SHM_PATH=/dev/shm/synth_vgpu_vram
+      - SYNTHGPU_UDS_PATH=/tmp/vgpu/control.sock
+      - PYTHONUNBUFFERED=1
+
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /tmp/vgpu/control.sock"]
+      interval: 3s
+      timeout: 2s
+      retries: 15
+      start_period: 2s
+
+    restart: unless-stopped
+
+  # ── Data Plane: AI Client Workload ───────────────────────────────
+  ai-client-workload:
+    build:
+      context: .
+      dockerfile: Dockerfile.hypervisor
+    container_name: synthgpu-client
+    hostname: ai-node
+
+    depends_on:
+      synthgpu-hypervisor:
+        condition: service_healthy
+
+    # ═══════════════════════════════════════════════════════════════
+    # CRITICAL: Join the hypervisor's IPC namespace so both containers
+    # mmap the EXACT SAME /dev/shm pages (MAP_SHARED + same inode).
+    # Without this, zero-copy fails → segfault.
+    # ═══════════════════════════════════════════════════════════════
+    ipc: container:synthgpu-hypervisor
+
+    volumes:
+      # Same UDS socket path as the hypervisor
+      - vgpu-socket-dir:/tmp/vgpu
+      # The .so library (also in-image, but volume ensures future
+      # client images without the .so can also use it)
+      - libsynthgpu:/usr/local/lib/synthgpu:ro
+
+    environment:
+      # ═══════════════════════════════════════════════════════════
+      # THE TRICK: every CUDA call hits our shim first
+      # ═══════════════════════════════════════════════════════════
+      - LD_PRELOAD=/usr/local/lib/synthgpu/libsynthgpu.so
+      - SYNTHGPU_UDS_PATH=/tmp/vgpu/control.sock
+      - PYTHONUNBUFFERED=1
+
+    entrypoint: ["/usr/local/bin/entrypoint.sh"]
+
+    # Default: keep alive for interactive testing
+    command: ["tail", "-f", "/dev/null"]
+
+    restart: unless-stopped
+
+volumes:
+  vgpu-socket-dir:
+    driver: local
+  libsynthgpu:
+    driver: local

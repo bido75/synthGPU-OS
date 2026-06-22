@@ -8,7 +8,10 @@ const PRESET_PROMPTS = [
   { label: 'SynthGPU pitch', text: 'What would it mean if AI inference could run without any GPU hardware at all?' },
 ]
 
-const BACKEND_URLS = { ollama: 'http://localhost:11434', lmstudio: 'http://localhost:1234' }
+const DEFAULT_BACKEND_URLS = {
+  ollama: 'http://host.docker.internal:11434',
+  lmstudio: 'http://host.docker.internal:1234',
+}
 
 // ── Panel A: Backend Connection Manager ──────────────────────────────────────
 function BackendConnector({ inference, onModelSelect, onConnected, systemRam }) {
@@ -19,11 +22,31 @@ function BackendConnector({ inference, onModelSelect, onConnected, systemRam }) 
   const [pullModel, setPullModel] = useState('')
   const [pulling, setPulling] = useState(false)
   const [pullProgress, setPullProgress] = useState(null)
+  const [backendUrls, setBackendUrls] = useState(DEFAULT_BACKEND_URLS)
 
   const connected = inference?.backend_status === 'connected'
   const backendName = inference?.backend
   const models = inference?.available_models || []
   const backendUrl = inference?.backend_url || ''
+  const activeBackendType = inference?.backend_type || null
+  const selectedBackendUrl = backendType === 'custom'
+    ? customUrl
+    : (backendUrls[backendType] || '')
+
+  useEffect(() => {
+    fetch('/api/inference/config')
+      .then(async resp => {
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+        return resp.json()
+      })
+      .then(config => {
+        setBackendUrls(current => ({ ...current, ...(config.endpoints || {}) }))
+        if (config.custom_default) {
+          setCustomUrl(current => current || config.custom_default)
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   // Use total system RAM capacity for model fit — NOT available_mb.
   // available_mb drops to ~440MB when a model is already loaded in Ollama,
@@ -41,20 +64,39 @@ function BackendConnector({ inference, onModelSelect, onConnected, systemRam }) 
   }
 
   const testConnection = async () => {
+    if (backendType === 'custom' && !customUrl.trim()) {
+      setConnResult({ connected: false, error: 'Enter the HP DL360 Ollama URL first' })
+      return
+    }
     setConnecting(true)
     setConnResult(null)
     try {
-      const url = backendType === 'custom' ? customUrl : BACKEND_URLS[backendType]
       const resp = await fetch('/api/inference/connect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ backend: backendType, url }),
+        body: JSON.stringify(
+          backendType === 'custom'
+            ? { backend: 'custom', url: customUrl.trim() }
+            : { backend: backendType }
+        ),
       })
-      const data = await resp.json()
+      const contentType = resp.headers.get('content-type') || ''
+      const data = contentType.includes('application/json')
+        ? await resp.json()
+        : { connected: false, error: `SynthGPU API returned HTTP ${resp.status}` }
+      if (!resp.ok && !data.message && !data.error) {
+        data.error = `SynthGPU API returned HTTP ${resp.status}`
+      }
       setConnResult(data)
       if (data.connected && onConnected) onConnected(data)
     } catch (e) {
-      setConnResult({ connected: false, error: e.message })
+      const apiUnavailable = e instanceof TypeError && e.message === 'Failed to fetch'
+      setConnResult({
+        connected: false,
+        error: apiUnavailable
+          ? `Cannot reach the SynthGPU API at ${window.location.origin}. Check that synthgpu-core is healthy.`
+          : e.message,
+      })
     } finally {
       setConnecting(false)
     }
@@ -127,7 +169,7 @@ function BackendConnector({ inference, onModelSelect, onConnected, systemRam }) 
           { id: 'custom', label: '○ Custom URL' },
         ].map(b => (
           <button key={b.id}
-                  onClick={() => setBackendType(b.id)}
+                  onClick={() => { setBackendType(b.id); setConnResult(null) }}
                   className="btn"
                   style={{
                     background: backendType === b.id ? '#00d4ff22' : '#1a1a2e',
@@ -135,14 +177,16 @@ function BackendConnector({ inference, onModelSelect, onConnected, systemRam }) 
                     color: backendType === b.id ? '#00d4ff' : '#94a3b8',
                     fontSize: '0.75rem', padding: '0.35rem 0.75rem',
                   }}>
-            {b.label}
+            {b.id === 'ollama' ? 'Local Ollama'
+              : b.id === 'custom' ? 'HP DL360 / Custom'
+              : 'LM Studio'}
           </button>
         ))}
       </div>
 
       <div className="flex gap-2 mb-2">
         <input
-          value={backendType === 'custom' ? customUrl : (BACKEND_URLS[backendType] || '')}
+          value={selectedBackendUrl}
           onChange={e => backendType === 'custom' && setCustomUrl(e.target.value)}
           readOnly={backendType !== 'custom'}
           style={{
@@ -155,6 +199,24 @@ function BackendConnector({ inference, onModelSelect, onConnected, systemRam }) 
           {connecting ? '⏳' : '⚡'} Test Connection
         </button>
       </div>
+
+      <div className="mb-2" style={{ color: '#64748b', fontSize: '0.68rem' }}>
+        {backendType === 'ollama'
+          ? 'Local PC Ollama via Docker host gateway (Windows host 10.0.0.163)'
+          : backendType === 'custom'
+          ? 'External Ollama endpoint on the HP DL360'
+          : 'LM Studio on the local PC via Docker host gateway'}
+      </div>
+
+      {connected && (
+        <div className="mb-3" style={{ color: '#94a3b8', fontSize: '0.68rem' }}>
+          Active backend: <span style={{ color: '#10b981' }}>{backendName}</span>
+          {' at '}<code style={{ color: '#00d4ff' }}>{backendUrl}</code>
+          {activeBackendType && activeBackendType !== backendType && (
+            <span style={{ color: '#f59e0b' }}> (different from selected tab)</span>
+          )}
+        </div>
+      )}
 
       {connResult && (
         <div className="mb-3" style={{ fontSize: '0.75rem' }}>
@@ -311,6 +373,8 @@ function InferenceConsole({ inference, selectedModel, onModelChange }) {
   const [inferencePhase, setInferencePhase] = useState(null)
   const [preflightResult, setPreflightResult] = useState(null)
   const [elapsedMs, setElapsedMs] = useState(0)
+  const [maxTokens, setMaxTokens] = useState(1024)
+  const [doneReason, setDoneReason] = useState(null)
   const elapsedTimerRef = useRef(null)
   const wsRef = useRef(null)
   const typewriteQueue = useRef([])
@@ -386,6 +450,12 @@ function InferenceConsole({ inference, selectedModel, onModelChange }) {
           warpsDispatched: (inference?.active_session?.tokens_so_far || 0) * 50,
         })
       } else if (data.type === 'done') {
+        setDoneReason(data.done_reason || 'stop')
+        setMetrics(prev => ({
+          ...(prev || {}),
+          totalTokens: data.total_tokens ?? prev?.totalTokens ?? 0,
+        }))
+        if (data.total_ms != null) setElapsedMs(data.total_ms)
         setRunning(false)
         setInferencePhase('done')
         clearInterval(elapsedTimerRef.current)
@@ -409,6 +479,7 @@ function InferenceConsole({ inference, selectedModel, onModelChange }) {
     setError(null)
     setRunning(true)
     setMetrics(null)
+    setDoneReason(null)
     setInferencePhase('loading_model')
     setElapsedMs(0)
     clearInterval(elapsedTimerRef.current)
@@ -429,7 +500,7 @@ function InferenceConsole({ inference, selectedModel, onModelChange }) {
       const resp = await fetch('/api/inference/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, prompt, stream: true }),
+        body: JSON.stringify({ model, prompt, stream: true, max_tokens: maxTokens }),
       })
       if (!resp.ok) {
         const err = await resp.json()
@@ -531,13 +602,30 @@ function InferenceConsole({ inference, selectedModel, onModelChange }) {
         }}
       />
 
-      <div className="flex gap-2 mb-4">
+      <div className="flex flex-wrap items-center gap-2 mb-4">
         <button className="btn btn-primary" disabled={running || !connected} onClick={startInference}>
           ▶ Run Through SynthGPU
         </button>
         {running && (
           <button className="btn btn-secondary" onClick={stopInference}>■ Stop</button>
         )}
+        <label style={{ color: '#94a3b8', fontSize: '0.72rem', marginLeft: 4 }}>
+          Max tokens
+          <select
+            value={maxTokens}
+            onChange={e => setMaxTokens(Number(e.target.value))}
+            disabled={running}
+            style={{
+              marginLeft: 6, background: '#0a0a0f', border: '1px solid #2a2a3e',
+              borderRadius: 6, padding: '0.35rem 0.5rem', color: '#f1f5f9',
+              fontSize: '0.72rem',
+            }}
+          >
+            {[256, 1024, 2048, 4096].map(value => (
+              <option key={value} value={value}>{value}</option>
+            ))}
+          </select>
+        </label>
         <button className="btn" style={{ background: '#1a1a2e', border: '1px solid #2a2a3e',
                                           color: '#94a3b8', fontSize: '0.75rem' }}
                 onClick={() => { setOutput(''); setMetrics(null); setError(null) }}>
@@ -629,11 +717,13 @@ function InferenceConsole({ inference, selectedModel, onModelChange }) {
             </div>
           )}
           {inferencePhase === 'done' && (
-            <div style={{ color: '#10b981', fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: '1.1rem' }}>✓</span>
+            <div style={{ color: doneReason === 'length' ? '#f59e0b' : '#10b981', fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: '1.1rem' }}>{doneReason === 'length' ? '!' : '✓'}</span>
               <div>
                 <div style={{ fontWeight: 600 }}>
-                  Complete — {metrics?.totalTokens || 0} tokens in {(elapsedMs / 1000).toFixed(1)}s
+                  {doneReason === 'length'
+                    ? `Stopped — token limit reached (${metrics?.totalTokens || 0} tokens). Response may be incomplete.`
+                    : `Complete — ${metrics?.totalTokens || 0} tokens in ${(elapsedMs / 1000).toFixed(1)}s`}
                 </div>
                 <div style={{ fontSize: '0.7rem', opacity: 0.7 }}>
                   Average: {metrics?.avgTps || '0.0'} tok/sec

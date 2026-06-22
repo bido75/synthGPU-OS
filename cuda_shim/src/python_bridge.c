@@ -67,6 +67,7 @@ static PyObject *_call(const char *fn, PyObject *args) {
 
 static long  _warps_fallback = 0;
 static float _throughput_fallback = 0.0f;
+static int   _fallback_warned = 0;
 
 long synthgpu_get_warps_executed(void) {
     return _warps_fallback;
@@ -74,6 +75,32 @@ long synthgpu_get_warps_executed(void) {
 
 float synthgpu_get_warp_throughput(void) {
     return _throughput_fallback;
+}
+
+static void _record_warp_dispatch(long warps, double exec_ms) {
+    int recorded = 0;
+
+    if (_bridge_ready) {
+        PyGILState_STATE gstate = PyGILState_Ensure();
+        PyObject *args = Py_BuildValue("(ld)", warps, exec_ms);
+        PyObject *result = args ? _call("record_warp_dispatch", args) : NULL;
+        if (result) {
+            recorded = 1;
+            Py_DECREF(result);
+        }
+        Py_XDECREF(args);
+        PyGILState_Release(gstate);
+    }
+
+    if (!recorded) {
+        _warps_fallback += warps;
+        if (!_fallback_warned) {
+            fprintf(stderr,
+                    "[SynthGPU] WARNING: scheduler telemetry call failed; "
+                    "using fallback warp counter.\n");
+            _fallback_warned = 1;
+        }
+    }
 }
 
 /* ── bridge_sgemm ────────────────────────────────────────────────── */
@@ -86,29 +113,10 @@ void bridge_sgemm(const float *A, const float *B, float *C,
     /* Fast path: pure C via OpenBLAS (already called in cublas.c).
      * Only call Python bridge if telemetry recording is needed.
      * The warp recording happens here; computation was already done. */
-    if (_bridge_ready) {
-        PyGILState_STATE gstate = PyGILState_Ensure();
-
-        /* Estimate warp count: 1 warp per 32x32 tile */
-        int warps = (m / 32 + 1) * (n / 32 + 1);
-        PyObject *args = Py_BuildValue("(if)", warps, 1.0f);
-        PyObject *r = _call("_scheduler", NULL);
-        if (r) {
-            PyObject *method = PyObject_GetAttrString(r, "record_external_warps");
-            if (method) {
-                PyObject *call_args = Py_BuildValue("(if)", warps, 1.0f);
-                PyObject *ret = PyObject_CallObject(method, call_args);
-                Py_XDECREF(ret);
-                Py_DECREF(call_args);
-                Py_DECREF(method);
-            }
-            Py_DECREF(r);
-        }
-        Py_XDECREF(args);
-
-        PyGILState_Release(gstate);
-    }
-    _warps_fallback += (m / 32 + 1) * (n / 32 + 1);
+    int warps = (m / 32 + 1) * (n / 32 + 1);
+    _record_warp_dispatch(warps, 1.0);
+    (void)A; (void)B; (void)C; (void)k;
+    (void)alpha; (void)beta; (void)trans_a; (void)trans_b;
 }
 
 /* ── bridge_dgemm ────────────────────────────────────────────────── */
@@ -127,12 +135,12 @@ void bridge_dgemm(const double *A, const double *B, double *C,
 /* ── bridge_softmax / bridge_relu / bridge_layer_norm ───────────── */
 
 void bridge_softmax(const float *input, float *output, int rows, int cols) {
-    _warps_fallback += rows;
-    (void)input; (void)output;
+    _record_warp_dispatch(rows, 1.0);
+    (void)input; (void)output; (void)cols;
 }
 
 void bridge_relu(const float *input, float *output, int n) {
-    _warps_fallback += (n / 32) + 1;
+    _record_warp_dispatch((n / 32) + 1, 1.0);
     (void)input; (void)output;
 }
 
@@ -140,6 +148,6 @@ void bridge_layer_norm(const float *input, const float *gamma,
                        const float *beta, float *output,
                        int rows, int cols, float eps)
 {
-    _warps_fallback += rows * 2;
-    (void)input; (void)gamma; (void)beta; (void)output; (void)eps;
+    _record_warp_dispatch(rows * 2L, 1.0);
+    (void)input; (void)gamma; (void)beta; (void)output; (void)cols; (void)eps;
 }

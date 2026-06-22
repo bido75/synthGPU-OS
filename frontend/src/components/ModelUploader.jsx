@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useEffect, useState, useRef } from 'react'
 
 export default function ModelUploader() {
   const [dragging, setDragging] = useState(false)
@@ -7,7 +7,16 @@ export default function ModelUploader() {
   const [model, setModel] = useState(null)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
+  const [provider, setProvider] = useState('cpu')
+  const [providerStatus, setProviderStatus] = useState({ cpu: true, openvino: false })
   const inputRef = useRef(null)
+
+  useEffect(() => {
+    fetch('/api/model/providers')
+      .then(resp => resp.ok ? resp.json() : Promise.reject(new Error('Provider status unavailable')))
+      .then(setProviderStatus)
+      .catch(() => setProviderStatus({ cpu: true, openvino: false }))
+  }, [])
 
   const uploadFile = async (file) => {
     if (!file.name.endsWith('.onnx')) {
@@ -45,7 +54,7 @@ export default function ModelUploader() {
       const resp = await fetch(`/api/model/${model.model_id}/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ input_shape: [1], dtype: 'float32' }),
+        body: JSON.stringify({ input_shape: [1], dtype: 'float32', provider }),
       })
       let data
       const ct = resp.headers.get('content-type') || ''
@@ -75,7 +84,7 @@ export default function ModelUploader() {
     <div className="card">
       <div className="flex items-center justify-between mb-3">
         <div className="card-title mb-0">ONNX Model Runner</div>
-        <span className="badge-no-gpu">SynthGPU Execution Provider</span>
+        <span className="badge-no-gpu">ONNX Runtime Instrumentation</span>
       </div>
 
       {!model ? (
@@ -121,7 +130,21 @@ export default function ModelUploader() {
             ))}
           </div>
 
-          <div className="flex gap-2 mb-4">
+          <div className="flex gap-2 mb-4 items-center">
+            <label style={{ color: '#94a3b8', fontSize: '0.75rem' }} htmlFor="onnx-provider">
+              Provider
+            </label>
+            <select
+              id="onnx-provider"
+              value={provider}
+              disabled={running}
+              onChange={event => { setProvider(event.target.value); setResult(null) }}
+              style={{ background: '#0a0a0f', color: '#f1f5f9', border: '1px solid #2a2a3e', borderRadius: 6, padding: '0.45rem' }}>
+              <option value="cpu">CPU</option>
+              <option value="openvino" disabled={!providerStatus.openvino}>
+                OpenVINO{providerStatus.openvino ? '' : ' (unavailable)'}
+              </option>
+            </select>
             <button className="btn btn-primary" disabled={running} onClick={runInference}>
               {running ? '⏳ Running...' : '▶ Run Inference'}
             </button>
@@ -139,6 +162,9 @@ export default function ModelUploader() {
                 { label: 'Inference time', value: `${result.elapsed_ms}ms` },
                 { label: 'Throughput', value: `${result.throughput_per_sec} inferences/sec` },
                 { label: 'Device', value: result.device || 'SynthGPU Virtual Accelerator' },
+                { label: 'Provider', value: result.provider || '--' },
+                { label: 'Profiled node time', value: `${result.profiled_node_total_ms ?? 0}ms` },
+                { label: 'Correctness gate', value: result.correctness_verified ? 'Verified' : 'Not verified' },
               ].map(({ label, value }) => (
                 <div key={label} className="flex justify-between py-1"
                      style={{ borderBottom: '1px solid #2a2a3e' }}>
@@ -146,6 +172,29 @@ export default function ModelUploader() {
                   <span style={{ color: '#00d4ff', fontSize: '0.75rem', fontFamily: 'monospace' }}>{value}</span>
                 </div>
               ))}
+              {result.unsupported_ops?.length > 0 && (
+                <div className="mt-3" style={{ color: '#f59e0b', fontSize: '0.75rem' }}>
+                  Unvalidated ops: {result.unsupported_ops.join(', ')}
+                </div>
+              )}
+              {result.per_node_timing_ms?.length > 0 && (
+                <div className="mt-3">
+                  <div style={{ color: '#f1f5f9', fontSize: '0.75rem', fontWeight: 600, marginBottom: 4 }}>
+                    Real per-node timing
+                  </div>
+                  {result.per_node_timing_ms.map((node, index) => (
+                    <div key={`${node.node_name}-${index}`} className="flex justify-between py-1"
+                         style={{ borderBottom: '1px solid #2a2a3e', gap: 12 }}>
+                      <span style={{ color: '#94a3b8', fontSize: '0.7rem', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {node.node_name} ({node.op_name})
+                      </span>
+                      <span style={{ color: '#00d4ff', fontSize: '0.7rem', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                        {node.duration_ms}ms
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>

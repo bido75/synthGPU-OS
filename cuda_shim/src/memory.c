@@ -33,9 +33,11 @@
 #endif
 
 /* ── Configuration ───────────────────────────────────────────── */
-#define VRAM_DEFAULT_MB  4096   /* 4 GB default virtual VRAM */
 #define MAX_ALLOCATIONS  8192   /* Maximum concurrent allocations */
 #define ALIGN_BYTES      256    /* GPU memory alignment requirement */
+#define CONSTRAINED_RAM_THRESHOLD_MB  (16 * 1024)
+#define CONSTRAINED_POOL_MAX_MB       256
+#define CONSTRAINED_POOL_SAFE_MB      128
 
 /* ── Internal state ──────────────────────────────────────────── */
 static uint8_t *_vram_pool  = NULL;
@@ -51,46 +53,82 @@ typedef struct {
 
 static Alloc _alloc_table[MAX_ALLOCATIONS];
 
-/* ── CPU core count ──────────────────────────────────────────── */
-int synthgpu_compute_units(void) {
+/* ── Pool sizing ─────────────────────────────────────────────── */
+size_t synthgpu_vram_budget_mb(size_t total_mb, size_t available_mb,
+                               const char *override_mb) {
+    size_t pool_mb;
+    int constrained = total_mb < CONSTRAINED_RAM_THRESHOLD_MB;
+
+    if (override_mb != NULL) {
+        long long requested = atoll(override_mb);
+        pool_mb = requested > 0 ? (size_t)requested : 0;
+        if (constrained) {
+            size_t safe_max = available_mb * 40 / 100;
+            if (pool_mb > safe_max) pool_mb = safe_max;
+            if (pool_mb > CONSTRAINED_POOL_MAX_MB)
+                pool_mb = CONSTRAINED_POOL_MAX_MB;
+        } else {
+            size_t safe_max = available_mb * 80 / 100;
+            if (pool_mb > safe_max) pool_mb = safe_max;
+        }
+        if (pool_mb < 64) pool_mb = 64;
+    } else if (constrained) {
+        pool_mb = available_mb * 25 / 100;
+        if (pool_mb > CONSTRAINED_POOL_SAFE_MB)
+            pool_mb = CONSTRAINED_POOL_SAFE_MB;
+        if (pool_mb < 64) pool_mb = 64;
+    } else {
+        size_t avail_cap = available_mb * 75 / 100;
+        pool_mb = total_mb * 40 / 100;
+        if (pool_mb > avail_cap) pool_mb = avail_cap;
+        if (pool_mb < 256) pool_mb = 256;
+    }
+
+    return (pool_mb / 64) * 64;
+}
+
+static void probe_system_memory_mb(size_t *total_mb, size_t *available_mb) {
 #ifdef _WIN32
-    SYSTEM_INFO si;
-    GetSystemInfo(&si);
-    return (int)si.dwNumberOfProcessors;
+    MEMORYSTATUSEX ms;
+    ms.dwLength = sizeof(ms);
+    if (GlobalMemoryStatusEx(&ms)) {
+        *total_mb = (size_t)(ms.ullTotalPhys / (1024 * 1024));
+        *available_mb = (size_t)(ms.ullAvailPhys / (1024 * 1024));
+        return;
+    }
 #else
-    long n = sysconf(_SC_NPROCESSORS_ONLN);
-    return n > 0 ? (int)n : 4;
+    FILE *f = fopen("/proc/meminfo", "r");
+    if (f) {
+        unsigned long long total_kb = 0;
+        unsigned long long available_kb = 0;
+        char line[256];
+        while (fgets(line, sizeof(line), f)) {
+            if (sscanf(line, "MemTotal: %llu kB", &total_kb) == 1) continue;
+            if (sscanf(line, "MemAvailable: %llu kB", &available_kb) == 1) continue;
+        }
+        fclose(f);
+        if (total_kb > 0 && available_kb > 0) {
+            *total_mb = (size_t)(total_kb / 1024);
+            *available_mb = (size_t)(available_kb / 1024);
+            return;
+        }
+    }
 #endif
+    *total_mb = 8192;
+    *available_mb = 4096;
 }
 
 /* ── Pool initialisation ─────────────────────────────────────── */
 void synthgpu_vram_init(void) {
     if (_vram_pool) return;  /* already initialised */
 
-    /* Respect SYNTHGPU_VRAM_MB env var */
-    const char *env_mb = getenv("SYNTHGPU_VRAM_MB");
-    size_t mb = env_mb ? (size_t)atol(env_mb) : 0;
+    size_t total_mb;
+    size_t available_mb;
+    probe_system_memory_mb(&total_mb, &available_mb);
 
-    if (mb == 0) {
-        /* Default: 40% of available system RAM, capped at 4 GB */
-#ifdef _WIN32
-        MEMORYSTATUSEX ms; ms.dwLength = sizeof(ms);
-        GlobalMemoryStatusEx(&ms);
-        mb = (size_t)(ms.ullAvailPhys * 40 / 100 / (1024*1024));
-#else
-        FILE *f = fopen("/proc/meminfo", "r");
-        long long avail_kb = 0;
-        if (f) {
-            char line[256];
-            while (fgets(line, sizeof(line), f))
-                if (sscanf(line, "MemAvailable: %lld kB", &avail_kb) == 1) break;
-            fclose(f);
-        }
-        mb = avail_kb > 0 ? (size_t)(avail_kb / 1024 * 40 / 100) : 4096;
-#endif
-        if (mb > 4096) mb = 4096;
-        if (mb < 256)  mb = 256;
-    }
+    /* Read the override once, before selecting the hardware profile. */
+    const char *env_mb = getenv("SYNTHGPU_VRAM_MB");
+    size_t mb = synthgpu_vram_budget_mb(total_mb, available_mb, env_mb);
 
     _vram_total = mb * 1024ULL * 1024ULL;
 

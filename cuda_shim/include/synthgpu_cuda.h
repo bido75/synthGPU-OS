@@ -9,13 +9,19 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "cuda_runtime_api.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+/* CUDA runtime error state, owned by device_info.c. */
+extern cudaError_t _last_error;
+
 /* ── Virtual VRAM ────────────────────────────────────────────────── */
 void  synthgpu_vram_init(void);
+size_t synthgpu_vram_budget_mb(size_t total_mb, size_t available_mb,
+                               const char *override_mb);
 void *synthgpu_alloc(size_t size);
 void  synthgpu_free(void *ptr);
 void *synthgpu_d2h_ptr(const void *device_ptr);

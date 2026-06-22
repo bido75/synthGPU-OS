@@ -12,10 +12,11 @@ from typing import Optional, Dict, List, Generator
 from synthgpu.warp_scheduler import WarpScheduler, WARP_SIZE
 from synthgpu.memory_manager import VirtualMemoryManager
 from synthgpu.ops import gpu_ops
+from synthgpu._version import __version__
 
 
 class SynthGPU:
-    VERSION = "0.2.0-beta"
+    VERSION = __version__
     DEVICE_NAME = "SynthGPU Virtual Accelerator"
 
     def __init__(self, vram_mb: int = 4096, compute_units: int = None):
@@ -39,12 +40,16 @@ class SynthGPU:
         self._os = f"{platform.system()} {platform.release()}"
 
         # Pre-allocated buffers for repeated benchmark matmuls (avoids GC pressure)
-        self._bench_A = np.random.randn(64, 64).astype(np.float32)
-        self._bench_B = np.random.randn(64, 64).astype(np.float32)
+        bench_dim = 16 if self.memory.is_degraded else 64
+        self._bench_A = np.random.randn(bench_dim, bench_dim).astype(np.float32)
+        self._bench_B = np.random.randn(bench_dim, bench_dim).astype(np.float32)
 
         # Self-test
         self._self_test()
 
+        if self.memory.is_degraded:
+            print(f"  [SynthGPU] [!] DEGRADED MODE — System RAM <16GB. "
+                  f"Matrix ops capped at {self.memory.degraded_matrix_max_dim}x{self.memory.degraded_matrix_max_dim}.")
         print(f"  [SynthGPU] Device ready. "
               f"{self.scheduler.num_compute_units} compute units. "
               f"{vram_mb}MB vRAM allocated.")
@@ -158,6 +163,9 @@ class SynthGPU:
 
     def generate_tokens(self, model_config: Dict, max_tokens: int = 20) -> Generator:
         d_model = model_config['layers'][0]['Wq'].shape[0]
+        # In degraded mode, cap max_tokens to prevent memory pressure
+        if self.memory.is_degraded:
+            max_tokens = min(max_tokens, 5)
         for step in range(max_tokens):
             seq_len = step + 1
             x = np.random.randn(1, seq_len, d_model).astype(np.float32) * 0.1
@@ -204,6 +212,7 @@ class SynthGPU:
                 "uptime_seconds":   uptime,
                 "ops_executed":     self._op_count,
                 "total_compute_ms": round(self._total_compute_ms, 2),
+                "is_degraded":      self.memory.is_degraded,
                 # Full sub-dicts (used by cuda_shim/status and live telemetry)
                 "scheduler":        sched_tele,
                 "memory":           mem_tele,
@@ -215,7 +224,7 @@ class SynthGPU:
                 "active_streams":         sched_tele.get('warps_in_flight', 0),
                 "vram_used_mb":           int(mem_tele.get('vram_used_mb', 0)),
                 "vram_total_mb":          int(mem_tele.get('vram_total_mb', 128)),
-                "shim_version":           "v0.3.0",
+                "shim_version":           f"v{__version__}",
                 "shim_active":            True,
             }
         except Exception:
@@ -225,7 +234,7 @@ class SynthGPU:
                 "warps_executed": 0, "external_warps": 0,
                 "warp_throughput_per_sec": 0.0, "kernels_dispatched": 0,
                 "active_streams": 0, "vram_used_mb": 0, "vram_total_mb": 128,
-                "shim_version": "v0.3.0", "shim_active": True,
+                "shim_version": f"v{__version__}", "shim_active": True,
             }
 
     def device_info(self) -> dict:

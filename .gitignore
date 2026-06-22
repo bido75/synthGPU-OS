@@ -12,6 +12,7 @@ venv/
 .venv/
 env/
 *.env
+.env
 .env.local
 
 # Node / Frontend
@@ -50,3 +51,4 @@ models/
 # Misc build artifacts
 backend/vite
 backend/synthgpu-dashboard*
+vulkaninfo*.txt

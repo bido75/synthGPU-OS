@@ -11,6 +11,7 @@ import os
 import threading
 import urllib.request
 import urllib.error
+from urllib.parse import urlsplit, urlunsplit
 import numpy as np
 import psutil
 from collections import deque
@@ -18,6 +19,7 @@ from typing import Optional, Callable, Set, AsyncIterator
 
 from fastapi import APIRouter, Request, WebSocket
 from fastapi.responses import StreamingResponse, JSONResponse
+from synthgpu._version import __version__
 
 try:
     import httpx
@@ -25,8 +27,18 @@ try:
 except ImportError:
     HTTPX_AVAILABLE = False
 
-OLLAMA_URL = "http://localhost:11434"
-LM_STUDIO_URL = "http://localhost:1234"
+# Inside a container, localhost refers to the container itself. Docker Desktop
+# exposes the host under this name; native Linux gets the mapping from compose.
+_default_backend_host = (
+    "host.docker.internal" if os.environ.get("SYNTHGPU_DOCKER") else "localhost"
+)
+OLLAMA_URL = os.environ.get(
+    "SYNTHGPU_OLLAMA_URL", f"http://{_default_backend_host}:11434"
+)
+LM_STUDIO_URL = os.environ.get(
+    "SYNTHGPU_LMSTUDIO_URL", f"http://{_default_backend_host}:1234"
+)
+CUSTOM_OLLAMA_URL = os.environ.get("SYNTHGPU_CUSTOM_OLLAMA_URL", "").strip()
 
 # Origin header required by Ollama on Windows when OLLAMA_ORIGINS is not set
 _ORIGIN_HEADERS = {
@@ -36,11 +48,62 @@ _ORIGIN_HEADERS = {
 
 # Module-level backend state (mutated by detect_backend)
 _inference_state: dict = {
+    "backend_type": None,
     "backend_url": None,
     "backend_name": None,
     "backend_status": "disconnected",
     "available_models": [],
 }
+
+
+def _normalize_backend_url(value: str) -> str:
+    """Return a validated HTTP origin without API paths or trailing slashes."""
+    value = str(value or "").strip()
+    if not value:
+        raise ValueError("Backend URL is required")
+    if "://" not in value:
+        value = f"http://{value}"
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("Backend URL must be a valid http:// or https:// address")
+    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+        raise ValueError("Backend URL must not include an API path, query, or fragment")
+    return urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
+
+
+def _resolve_backend_target(backend_type: str, custom_url: str = "") -> dict:
+    """Resolve a UI selection to exactly one configured backend endpoint."""
+    backend_type = str(backend_type or "ollama").strip().lower()
+    if backend_type == "ollama":
+        return {
+            "type": "ollama", "name": "Ollama",
+            "url": _normalize_backend_url(OLLAMA_URL), "models_path": "/api/tags",
+        }
+    if backend_type == "lmstudio":
+        return {
+            "type": "lmstudio", "name": "LM Studio",
+            "url": _normalize_backend_url(LM_STUDIO_URL), "models_path": "/v1/models",
+        }
+    if backend_type == "custom":
+        return {
+            "type": "custom", "name": "Ollama (Custom)",
+            "url": _normalize_backend_url(custom_url), "models_path": "/api/tags",
+        }
+    raise ValueError(f"Unsupported backend type: {backend_type}")
+
+
+def _urlopen(req, timeout: float):
+    """Open direct LAN/host connections without inheriting proxy variables."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return opener.open(req, timeout=timeout)
+
+
+def _httpx_client(timeout: float):
+    return httpx.AsyncClient(
+        timeout=timeout,
+        headers=_ORIGIN_HEADERS,
+        trust_env=False,
+    )
 
 
 def _parse_models_ollama(data: dict) -> list:
@@ -75,15 +138,20 @@ async def detect_backend(state: dict = None) -> bool:
 
     urls_to_try = []
     if state.get("backend_url") and state.get("backend_name"):
-        path = "/api/tags" if state["backend_name"] == "Ollama" else "/v1/models"
-        urls_to_try.append((state["backend_url"], state["backend_name"], path))
+        backend_type = state.get("backend_type") or (
+            "ollama" if state["backend_name"] == "Ollama" else "lmstudio"
+        )
+        path = "/v1/models" if backend_type == "lmstudio" else "/api/tags"
+        urls_to_try.append(
+            (state["backend_url"], state["backend_name"], path, backend_type)
+        )
 
-    for url, name, path in [
-        (OLLAMA_URL, "Ollama", "/api/tags"),
-        (LM_STUDIO_URL, "LM Studio", "/v1/models"),
+    for url, name, path, backend_type in [
+        (OLLAMA_URL, "Ollama", "/api/tags", "ollama"),
+        (LM_STUDIO_URL, "LM Studio", "/v1/models", "lmstudio"),
     ]:
         if not any(u[0] == url for u in urls_to_try):
-            urls_to_try.append((url, name, path))
+            urls_to_try.append((url, name, path, backend_type))
 
     loop = asyncio.get_event_loop()
 
@@ -93,18 +161,19 @@ async def detect_backend(state: dict = None) -> bool:
                 f"{url}{path}",
                 headers={"Origin": "http://localhost:8000"},
             )
-            with urllib.request.urlopen(req, timeout=3) as resp:
+            with _urlopen(req, timeout=3) as resp:
                 if resp.status == 200:
                     return json.loads(resp.read().decode())
         except Exception:
             pass
         return None
 
-    for url, name, path in urls_to_try:
+    for url, name, path, backend_type in urls_to_try:
         data = await loop.run_in_executor(None, _sync_get, url, name, path)
         if data is not None:
             state["backend_url"] = url
             state["backend_name"] = name
+            state["backend_type"] = backend_type
             state["backend_status"] = "connected"
             state["available_models"] = (
                 _parse_models_ollama(data) if name == "Ollama"
@@ -174,6 +243,11 @@ class SynthGPUTelemetryEngine:
         safe_ctx = max(256, min(2048, safe_ctx))
         safe_ctx = (safe_ctx // 256) * 256
         return safe_ctx
+
+    def _get_safe_max_tokens(self, requested_tokens: int, free_ram_mb: float) -> int:
+        """Cap output tokens to the RAM-safe context budget."""
+        requested_tokens = max(1, min(4096, requested_tokens))
+        return min(requested_tokens, self._get_safe_context(free_ram_mb))
 
     def _build_ollama_options(self, model_name: str = "") -> dict:
         """Build RAM-aware Ollama options. Called fresh per request."""
@@ -419,6 +493,7 @@ class SynthGPUTelemetryEngine:
             return {
                 "active": self.active_session is not None,
                 "backend": _inference_state["backend_name"],
+                "backend_type": _inference_state["backend_type"],
                 "backend_url": _inference_state["backend_url"],
                 "backend_status": _inference_state["backend_status"],
                 "active_model": self.active_model,
@@ -468,6 +543,7 @@ class InferenceProxyRouter:
             telem = engine.get_inference_telemetry()
             return {
                 "backend": state["backend_name"],
+                "backend_type": state["backend_type"],
                 "backend_url": state["backend_url"],
                 "backend_status": state["backend_status"],
                 "backend_connected": state["backend_status"] == "connected",
@@ -480,6 +556,25 @@ class InferenceProxyRouter:
                     "Run 'ollama serve' then click Test Connection"
                     if state["backend_status"] != "connected" else None
                 ),
+            }
+
+        @router.get("/api/inference/config")
+        async def inference_config():
+            return {
+                "endpoints": {
+                    "ollama": _normalize_backend_url(OLLAMA_URL),
+                    "lmstudio": _normalize_backend_url(LM_STUDIO_URL),
+                },
+                "custom_default": (
+                    _normalize_backend_url(CUSTOM_OLLAMA_URL)
+                    if CUSTOM_OLLAMA_URL else ""
+                ),
+                "active": {
+                    "type": state["backend_type"],
+                    "name": state["backend_name"],
+                    "url": state["backend_url"],
+                    "connected": state["backend_status"] == "connected",
+                },
             }
 
         @router.get("/api/inference/models")
@@ -495,19 +590,19 @@ class InferenceProxyRouter:
         @router.post("/api/inference/connect")
         async def connect_backend(request: Request):
             body = await request.json()
-            backend_type = body.get("backend", "ollama")
-            custom_url = body.get("url", "")
+            try:
+                target = _resolve_backend_target(
+                    body.get("backend", "ollama"), body.get("url", "")
+                )
+            except ValueError as exc:
+                return JSONResponse(
+                    {"connected": False, "error": str(exc), "message": str(exc)},
+                    status_code=400,
+                )
 
-            if custom_url and custom_url not in (OLLAMA_URL, LM_STUDIO_URL, ""):
-                test_url = custom_url
-            elif backend_type == "lmstudio":
-                test_url = LM_STUDIO_URL
-            else:
-                test_url = OLLAMA_URL
-
-            is_ollama = not (backend_type == "lmstudio" or "1234" in test_url)
-            path = "/api/tags" if is_ollama else "/v1/models"
-            full_url = f"{test_url}{path}"
+            test_url = target["url"]
+            is_ollama = target["type"] != "lmstudio"
+            full_url = f"{test_url}{target['models_path']}"
 
             loop = asyncio.get_event_loop()
 
@@ -517,7 +612,7 @@ class InferenceProxyRouter:
                         full_url,
                         headers={"Origin": "http://localhost:8000"},
                     )
-                    with urllib.request.urlopen(req, timeout=5) as resp:
+                    with _urlopen(req, timeout=5) as resp:
                         if resp.status == 200:
                             return ("ok", json.loads(resp.read().decode()))
                         return ("http_error", resp.status)
@@ -538,6 +633,7 @@ class InferenceProxyRouter:
                 )
                 state["backend_url"] = test_url
                 state["backend_name"] = backend_name
+                state["backend_type"] = target["type"]
                 state["backend_status"] = "connected"
                 state["available_models"] = models
                 print(f"[SynthGPU] ✓ {backend_name} connected at {test_url} "
@@ -545,30 +641,44 @@ class InferenceProxyRouter:
                 return {
                     "connected": True,
                     "backend": backend_name,
+                    "backend_type": target["type"],
                     "backend_url": test_url,
                     "backend_status": "connected",
                     "models": models,
-                    "message": f"Connected to {backend_name}. Found {len(models)} model(s).",
+                    "message": (
+                        f"Connected to {target['name']} at {test_url}. "
+                        f"Found {len(models)} model(s)."
+                    ),
                 }
 
             if result == "connect_error":
+                reason = payload
+                connection_refused = "refused" in str(reason).lower()
                 return {
                     "connected": False,
-                    "error": "Connection refused",
-                    "message": f"Cannot reach Ollama at {test_url}. Is it running?",
-                    "fix": "ollama serve",
-                    "fix_windows": "Or double-click the Ollama icon in the system tray",
+                    "error": reason,
+                    "backend_type": target["type"],
+                    "backend_url": test_url,
+                    "message": f"Cannot reach {target['name']} at {test_url}: {reason}",
+                    "fix": "ollama serve" if connection_refused else None,
+                    "fix_windows": (
+                        "Or double-click the Ollama icon in the system tray"
+                        if connection_refused else None
+                    ),
                 }
 
             return {
                 "connected": False,
                 "error": str(payload),
-                "message": f"Ollama returned an error ({payload})",
-                "fix": "ollama serve",
+                "backend_type": target["type"],
+                "backend_url": test_url,
+                "message": f"{target['name']} at {test_url} returned an error ({payload})",
+                "fix": "ollama serve" if is_ollama else None,
             }
 
         @router.post("/api/inference/disconnect")
         async def disconnect_backend():
+            state["backend_type"] = None
             state["backend_url"] = None
             state["backend_name"] = None
             state["backend_status"] = "disconnected"
@@ -580,7 +690,13 @@ class InferenceProxyRouter:
             body = await request.json()
             model = body.get("model", "llama3.2:1b")
             prompt = body.get("prompt", "")
-            max_tokens = body.get("max_tokens", 256)
+            try:
+                requested_max_tokens = int(body.get("max_tokens", 1024))
+            except (TypeError, ValueError):
+                requested_max_tokens = 1024
+            requested_max_tokens = max(1, min(4096, requested_max_tokens))
+            free_mb = psutil.virtual_memory().available / (1024 * 1024)
+            max_tokens = engine._get_safe_max_tokens(requested_max_tokens, free_mb)
             if not state["backend_url"]:
                 return JSONResponse({"error": "No LLM backend connected"}, status_code=503)
 
@@ -606,7 +722,7 @@ class InferenceProxyRouter:
                 start_ms = time.perf_counter() * 1000
                 token_start = time.perf_counter()
                 try:
-                    async with httpx.AsyncClient(timeout=180.0) as client:
+                    async with _httpx_client(timeout=180.0) as client:
                         async with client.stream(
                             "POST",
                             f"{state['backend_url']}/api/generate",
@@ -647,23 +763,35 @@ class InferenceProxyRouter:
                                     fut.add_done_callback(lambda f: f.exception())
                                 if data.get("done"):
                                     total_elapsed = time.perf_counter() * 1000 - start_ms
+                                    done_reason = data.get("done_reason", "stop")
                                     engine.on_inference_complete(total_tokens, total_elapsed)
                                     if broadcast_fn and token_connections:
                                         await broadcast_fn(token_connections, {
                                             "type": "done",
                                             "total_tokens": total_tokens,
                                             "total_ms": round(total_elapsed, 1),
+                                            "done_reason": done_reason,
                                         })
                                     break
                 except Exception as exc:
                     engine.on_inference_complete(total_tokens, 0)
                     if broadcast_fn and token_connections:
                         await broadcast_fn(token_connections, {
-                            "type": "error", "message": str(exc)
+                            "type": "error",
+                            "message": (
+                                f"{state['backend_name']} request to "
+                                f"{state['backend_url']} failed: "
+                                f"{type(exc).__name__}: {exc}"
+                            ),
                         })
 
             asyncio.create_task(_run())
-            return {"status": "streaming", "model": model}
+            return {
+                "status": "streaming",
+                "model": model,
+                "requested_max_tokens": requested_max_tokens,
+                "max_tokens": max_tokens,
+            }
 
         @router.get("/api/inference/memory")
         async def inference_memory():
@@ -700,7 +828,7 @@ class InferenceProxyRouter:
                 return JSONResponse({"error": "Ollama not connected"}, status_code=503)
 
             async def _stream_pull() -> AsyncIterator[bytes]:
-                async with httpx.AsyncClient(timeout=3600.0) as client:
+                async with _httpx_client(timeout=3600.0) as client:
                     async with client.stream(
                         "POST",
                         f"{state['backend_url']}/api/pull",
@@ -736,7 +864,7 @@ class InferenceProxyRouter:
                 total_tokens = 0
                 start_ms = time.perf_counter() * 1000
                 token_start = time.perf_counter()
-                async with httpx.AsyncClient(timeout=120.0) as client:
+                async with _httpx_client(timeout=120.0) as client:
                     async with client.stream(
                         "POST", f"{state['backend_url']}/api/generate", json=body
                     ) as resp:
@@ -800,7 +928,7 @@ class InferenceProxyRouter:
                 token_start = time.perf_counter()
                 total_tokens = 0
                 start_ms = time.perf_counter() * 1000
-                async with httpx.AsyncClient(timeout=120.0) as client:
+                async with _httpx_client(timeout=120.0) as client:
                     async with client.stream(
                         "POST", f"{state['backend_url']}/api/chat", json=body
                     ) as resp:
@@ -848,7 +976,7 @@ class InferenceProxyRouter:
             async def _stream() -> AsyncIterator[bytes]:
                 token_start = time.perf_counter()
                 total_tokens = 0
-                async with httpx.AsyncClient(timeout=120.0) as client:
+                async with _httpx_client(timeout=120.0) as client:
                     async with client.stream("POST", target, json=body) as resp:
                         async for line in resp.aiter_lines():
                             if not line.strip():
@@ -881,7 +1009,7 @@ class InferenceProxyRouter:
             if stream:
                 return StreamingResponse(_stream(), media_type="text/event-stream")
             else:
-                async with httpx.AsyncClient(timeout=120.0) as client:
+                async with _httpx_client(timeout=120.0) as client:
                     resp = await client.post(target, json=body)
                     data = resp.json()
                     usage = data.get("usage", {})
@@ -894,7 +1022,7 @@ class InferenceProxyRouter:
         async def list_openai_models():
             if not state["backend_url"]:
                 return JSONResponse({"data": []})
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with _httpx_client(timeout=5.0) as client:
                 try:
                     if state["backend_name"] == "Ollama":
                         resp = await client.get(f"{state['backend_url']}/api/tags")
@@ -913,7 +1041,7 @@ class InferenceProxyRouter:
         async def list_tags():
             if not state["backend_url"]:
                 return JSONResponse({"models": []})
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with _httpx_client(timeout=5.0) as client:
                 try:
                     resp = await client.get(f"{state['backend_url']}/api/tags")
                     return JSONResponse(resp.json())
@@ -926,7 +1054,7 @@ class InferenceProxyRouter:
             return JSONResponse({
                 "status": "active",
                 "device": "SynthGPU Virtual Accelerator",
-                "version": "0.2.0-beta",
+                "version": __version__,
                 "no_physical_gpu": True,
                 "backend": state["backend_name"],
                 "backend_url": state["backend_url"],

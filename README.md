@@ -1,4 +1,10 @@
-# SynthGPU Beta v0.2 — Virtual GPU Accelerator
+# synthGPU-OS
+
+[![CI/CD](https://github.com/bido75/synthGPU-OS/actions/workflows/ci.yml/badge.svg)](https://github.com/bido75/synthGPU-OS/actions/workflows/ci.yml)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/bido75/synthGPU-OS?quickstart=1)
+
+Software-defined GPU compute, Vulkan/CUDA compatibility, ONNX/OpenVINO
+instrumentation, and local or remote LLM inference on CPU hardware.
 
 ---
 
@@ -94,6 +100,47 @@ Open `http://localhost:8000`
 ```
 start.bat
 ```
+
+---
+
+## Container Installation
+
+### Windows: Docker Engine in Ubuntu WSL2
+
+Run from an Administrator PowerShell session:
+
+```powershell
+.\scripts\install.ps1
+```
+
+The installer checks virtualization and WSL, installs Ubuntu 24.04 when
+needed, installs Docker Engine inside Ubuntu, configures the Windows-host
+Ollama route, and starts SynthGPU at `http://localhost:8000`.
+
+WSL should be current before installation. Check with `wsl --version`; use
+`wsl --update` only when an older WSL/kernel is installed.
+
+### Linux/macOS
+
+```bash
+./scripts/install.sh
+```
+
+Docker Engine and Docker Compose v2 must already be installed.
+
+### Health Check and Uninstall
+
+```powershell
+.\scripts\check-docker-health.ps1
+.\scripts\install.ps1 -Uninstall
+```
+
+```bash
+./scripts/install.sh --uninstall
+```
+
+Uninstall removes only SynthGPU containers, locally built images, and
+project volumes. It preserves source files and WSL distributions.
 
 ---
 

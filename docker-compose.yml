@@ -1,0 +1,116 @@
+# =============================================================================
+# SynthGPU v0.3 — Docker Compose
+# =============================================================================
+# Usage:
+#   docker compose build
+#   docker compose up -d
+#   curl http://localhost:8000/api/device/status
+#
+# On memory-constrained hosts, SynthGPU automatically activates
+# Constrained Hardware Profile (<16GB RAM detection is built-in).
+
+version: "3.9"
+
+services:
+
+  # ── Core SynthGPU Inference Engine ───────────────────────────────────
+  synthgpu-core:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: synthgpu-core
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8000:8000"
+    shm_size: 4gb
+    environment:
+      - SYNTHGPU_DOCKER=1
+      - SYNTHGPU_OLLAMA_URL=${SYNTHGPU_OLLAMA_URL:-http://host.docker.internal:11434}
+      - SYNTHGPU_LMSTUDIO_URL=${SYNTHGPU_LMSTUDIO_URL:-http://host.docker.internal:1234}
+      - SYNTHGPU_CUSTOM_OLLAMA_URL=${SYNTHGPU_CUSTOM_OLLAMA_URL:-http://10.0.0.219:11434}
+      - SYNTHGPU_VRAM_MB=${SYNTHGPU_VRAM_MB:-}
+      - OLLAMA_NUM_PARALLEL=1
+      - OLLAMA_MAX_LOADED_MODELS=1
+      - OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-1}
+      - OMP_NUM_THREADS=${OMP_NUM_THREADS:-2}
+      - MKL_NUM_THREADS=${OPENBLAS_NUM_THREADS:-1}
+    volumes:
+      # Allow the container to communicate with a host Ollama instance
+      # or another container on the same Docker network.
+      - type: volume
+        source: synthgpu-tmp
+        target: /tmp
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/device/status"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        reservations:
+          cpus: "2"
+          memory: "2G"
+        limits:
+          cpus: "4"
+          memory: "8G"
+    restart: unless-stopped
+    networks:
+      - synthgpu-net
+
+  # ── Sample AI Workload Client ────────────────────────────────────────
+  # Connects to synthgpu-core over the internal network and simulates
+  # an AI inference workload (e.g., PyTorch / Ollama client).
+  synthgpu-client-node:
+    image: python:3.11-slim-bookworm
+    container_name: synthgpu-client
+    depends_on:
+      synthgpu-core:
+        condition: service_healthy
+    shm_size: 1gb
+    environment:
+      - SYNTHGPU_API_URL=http://synthgpu-core:8000
+      - OLLAMA_HOST=http://synthgpu-core:11434
+    volumes:
+      - type: bind
+        source: ./demos
+        target: /demos
+        read_only: true
+    working_dir: /workspace
+    command: >
+      sh -c "
+        echo '=== SynthGPU Client Node ===' &&
+        echo 'Backend: $${SYNTHGPU_API_URL}' &&
+        echo '' &&
+        echo 'Testing connection to SynthGPU core...' &&
+        curl -s $${SYNTHGPU_API_URL}/api/device/status &&
+        echo '' &&
+        echo 'Testing telemetry endpoint...' &&
+        curl -s $${SYNTHGPU_API_URL}/api/device/info | python3 -m json.tool &&
+        echo '' &&
+        echo 'Client node ready. Running demo workload...' &&
+        python3 /demos/investor_demo.py 2>/dev/null || echo 'Demo script not found — client idle.' &&
+        echo '' &&
+        echo '=== Client node setup complete. Keeping alive for exploration ===' &&
+        tail -f /dev/null
+      "
+    deploy:
+      resources:
+        reservations:
+          cpus: "1"
+          memory: "512M"
+        limits:
+          cpus: "2"
+          memory: "2G"
+    restart: unless-stopped
+    networks:
+      - synthgpu-net
+
+networks:
+  synthgpu-net:
+    driver: bridge
+
+volumes:
+  synthgpu-tmp:
+    driver: local

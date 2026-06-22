@@ -161,7 +161,9 @@ class BenchmarkRunner:
         return results
 
     def run_token_generation(self, num_tokens: int = 20):
-        d_model, num_heads, vocab = 256, 4, 32000
+        d_model = 64 if self.gpu.memory.is_degraded else 256
+        num_heads, vocab = max(1, d_model // 64), 32000
+        effective_tokens = min(num_tokens, 5) if self.gpu.memory.is_degraded else num_tokens
         num_layers = 2
         np.random.seed(1)
         s = 0.02
@@ -190,9 +192,9 @@ class BenchmarkRunner:
             'lm_head': np.random.randn(vocab, d_model).astype(np.float32) * s,
         }
 
-        for step_data in self.gpu.generate_tokens(model_config, max_tokens=num_tokens):
-            pct = int(((step_data['step'] + 1) / num_tokens) * 100)
-            yield {**step_data, "total_tokens": num_tokens, "pct_complete": pct}
+        for step_data in self.gpu.generate_tokens(model_config, max_tokens=effective_tokens):
+            pct = int(((step_data['step'] + 1) / effective_tokens) * 100)
+            yield {**step_data, "total_tokens": effective_tokens, "pct_complete": pct}
 
     def run_all(self) -> dict:
         results = {}

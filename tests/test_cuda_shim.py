@@ -8,10 +8,13 @@ import os
 import pytest
 import numpy as np
 
-# Ensure project root is on sys.path
+# Ensure project root and backend/ are on sys.path
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
+_BACKEND = os.path.join(_ROOT, "backend")
+if _BACKEND not in sys.path:
+    sys.path.insert(0, _BACKEND)
 
 
 # ── Bridge API ───────────────────────────────────────────────────────
@@ -124,7 +127,7 @@ class TestBridgeAPI:
 
 class TestWarpSchedulerIntegration:
     def _make_scheduler(self, num_warps=4):
-        from synthgpu.core.warp_scheduler import WarpScheduler
+        from synthgpu.warp_scheduler import WarpScheduler
         return WarpScheduler(num_compute_units=num_warps)
 
     def test_record_external_warps_increments_counter(self):

@@ -87,6 +87,13 @@ int cublasGetMathMode(void *handle, int *mode) {
     return CUBLAS_STATUS_SUCCESS;
 }
 
+int cublasGetVersion_v2(void *handle, int *version) {
+    (void)handle;
+    if (!version) return CUBLAS_STATUS_INVALID_VALUE;
+    *version = 120200;
+    return CUBLAS_STATUS_SUCCESS;
+}
+
 /* ── cublasSgemm — single-precision GEMM ───────────────────────── */
 int cublasSgemm_v2(void *handle, int transa, int transb,
                    int m, int n, int k,
@@ -151,6 +158,7 @@ int cublasGemmEx(void *handle, int transa, int transb,
                  void *C, int Ctype, int ldc,
                  int computeType, int algo)
 {
+    (void)computeType;
     (void)algo;
     if (Atype == CUDA_R_32F && Btype == CUDA_R_32F && Ctype == CUDA_R_32F)
         return cublasSgemm_v2(handle, transa, transb, m, n, k,
@@ -211,6 +219,7 @@ int cublasGemmStridedBatchedEx(void *handle, int transa, int transb,
                                 void *C, int Ctype, int ldc, long long sC,
                                 int batchCount, int computeType, int algo)
 {
+    (void)Btype; (void)Ctype; (void)computeType;
     (void)algo;
     if (Atype != CUDA_R_32F) return CUBLAS_STATUS_NOT_SUPPORTED;
     for (int i = 0; i < batchCount; i++)

@@ -31,12 +31,11 @@
 
 #include "../include/cuda_runtime_api.h"
 #include "../include/cublas.h"
+#include "../include/synthgpu_cuda.h"
 #include "memory.h"
 #include "bridge.h"
 
 /* ── Global state ─────────────────────────────────────────────── */
-static int _current_device = 0;
-static int _last_error     = 0;   /* cudaSuccess */
 
 /* ── Library constructor ──────────────────────────────────────── */
 /* Runs automatically when the .so is loaded (LD_PRELOAD / dlopen) */
@@ -77,71 +76,6 @@ static void synthgpu_init(void) {
 /* ═══════════════════════════════════════════════════════════════
  * SECTION 1 — Device functions
  * ═══════════════════════════════════════════════════════════════ */
-
-cudaError_t cudaGetDeviceCount(int *count) {
-    if (!count) { _last_error = cudaErrorInvalidValue; return cudaErrorInvalidValue; }
-    *count = 1;  /* SynthGPU appears as one virtual GPU */
-    return cudaSuccess;
-}
-
-cudaError_t cudaGetDevice(int *device) {
-    if (!device) { _last_error = cudaErrorInvalidValue; return cudaErrorInvalidValue; }
-    *device = _current_device;
-    return cudaSuccess;
-}
-
-cudaError_t cudaSetDevice(int device) {
-    if (device != 0) { _last_error = cudaErrorInvalidDevice; return cudaErrorInvalidDevice; }
-    _current_device = device;
-    return cudaSuccess;
-}
-
-cudaError_t cudaGetDeviceProperties(struct cudaDeviceProp *prop, int device) {
-    if (!prop || device != 0) { _last_error = cudaErrorInvalidDevice; return cudaErrorInvalidDevice; }
-
-    memset(prop, 0, sizeof(*prop));
-
-    /* Name shown by torch.cuda.get_device_name(0) */
-    strncpy(prop->name, "SynthGPU Virtual Accelerator", 255);
-
-    prop->totalGlobalMem      = synthgpu_vram_total_bytes();
-    prop->sharedMemPerBlock   = 49152;         /* 48 KB */
-    prop->regsPerBlock        = 65536;
-    prop->warpSize            = 32;            /* matches our scheduler */
-    prop->maxThreadsPerBlock  = 1024;
-    prop->maxThreadsDim[0]    = 1024;
-    prop->maxThreadsDim[1]    = 1024;
-    prop->maxThreadsDim[2]    = 64;
-    prop->maxGridSize[0]      = 2147483647;
-    prop->maxGridSize[1]      = 65535;
-    prop->maxGridSize[2]      = 65535;
-    prop->clockRate           = 1700000;       /* 1.7 GHz */
-    prop->totalConstMem       = 65536;
-    prop->major               = 8;             /* Report as Ampere sm_80 */
-    prop->minor               = 0;
-    prop->multiProcessorCount = synthgpu_compute_units();
-    prop->l2CacheSize         = 4194304;       /* 4 MB */
-    prop->memoryClockRate     = 9001000;       /* ~9 GHz GDDR6x equivalent */
-    prop->memoryBusWidth      = 256;
-    prop->concurrentKernels   = 1;
-    prop->computeMode         = cudaComputeModeDefault;
-
-    return cudaSuccess;
-}
-
-cudaError_t cudaDeviceGetAttribute(int *value, int attr, int device) {
-    if (!value || device != 0) return cudaErrorInvalidDevice;
-    /* Return sensible defaults for the most commonly queried attributes */
-    switch (attr) {
-        case 1:  *value = 1024;  break;  /* maxThreadsPerBlock */
-        case 4:  *value = 32;    break;  /* warpSize */
-        case 16: *value = 8;     break;  /* major */
-        case 17: *value = 0;     break;  /* minor */
-        case 35: *value = synthgpu_compute_units(); break; /* multiProcessorCount */
-        default: *value = 0;
-    }
-    return cudaSuccess;
-}
 
 /* ═══════════════════════════════════════════════════════════════
  * SECTION 2 — Memory functions
@@ -216,67 +150,10 @@ cudaError_t cudaMemGetInfo(size_t *free_bytes, size_t *total_bytes) {
  * SECTION 3 — Synchronisation
  * ═══════════════════════════════════════════════════════════════ */
 
-cudaError_t cudaDeviceSynchronize(void) {
-    /* Synchronous compute — nothing to wait for */
-    return cudaSuccess;
-}
-
 cudaError_t cudaThreadSynchronize(void) { return cudaSuccess; }
-cudaError_t cudaDeviceReset(void)       { return cudaSuccess; }
 
-/* ═══════════════════════════════════════════════════════════════
- * SECTION 4 — Error handling
- * ═══════════════════════════════════════════════════════════════ */
-
-cudaError_t cudaGetLastError(void) {
-    int err = _last_error;
-    _last_error = cudaSuccess;
-    return (cudaError_t)err;
-}
-
-cudaError_t cudaPeekAtLastError(void) {
-    return (cudaError_t)_last_error;
-}
-
-const char *cudaGetErrorString(cudaError_t error) {
-    switch ((int)error) {
-        case 0:   return "no error";
-        case 1:   return "invalid argument";
-        case 2:   return "out of memory";
-        case 3:   return "initialization error";
-        case 100: return "no CUDA-capable device is detected";
-        case 101: return "invalid device ordinal";
-        default:  return "unknown error";
-    }
-}
-
-const char *cudaGetErrorName(cudaError_t error) {
-    switch ((int)error) {
-        case 0:   return "cudaSuccess";
-        case 1:   return "cudaErrorInvalidValue";
-        case 2:   return "cudaErrorMemoryAllocation";
-        case 100: return "cudaErrorNoDevice";
-        case 101: return "cudaErrorInvalidDevice";
-        default:  return "cudaErrorUnknown";
-    }
-}
-
-/* ═══════════════════════════════════════════════════════════════
- * SECTION 5 — Version queries
- * ═══════════════════════════════════════════════════════════════ */
-
-cudaError_t cudaDriverGetVersion(int *driverVersion) {
-    if (!driverVersion) return cudaErrorInvalidValue;
-    *driverVersion = 12020;   /* Report as CUDA 12.2 */
-    return cudaSuccess;
-}
-
-cudaError_t cudaRuntimeGetVersion(int *runtimeVersion) {
-    if (!runtimeVersion) return cudaErrorInvalidValue;
-    *runtimeVersion = 12020;
-    return cudaSuccess;
-}
-
+#if 0
+/* cuBLAS exports are owned by cublas.c. */
 /* ═══════════════════════════════════════════════════════════════
  * SECTION 6 — cuBLAS Handle management
  * ═══════════════════════════════════════════════════════════════ */
@@ -425,3 +302,4 @@ cublasStatus_t cublasSgemmStridedBatched(
     }
     return CUBLAS_STATUS_SUCCESS;
 }
+#endif

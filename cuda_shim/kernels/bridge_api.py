@@ -22,30 +22,19 @@ _project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-# synthgpu package may be the top-level one (synthgpu/core/) or the backend
-# copy (backend/synthgpu/). Try all known locations gracefully.
+# Prefer flat backend/synthgpu/ layout, fall back to direct import
 try:
-    from synthgpu.core.warp_scheduler import WarpScheduler
-    from synthgpu.core.memory_manager import VirtualMemoryManager
+    from synthgpu.warp_scheduler import WarpScheduler
+    from synthgpu.memory_manager import VirtualMemoryManager
 except ModuleNotFoundError:
     try:
-        # backend/synthgpu/ layout — flat, no core/ subpackage
-        import importlib, types
+        import importlib
         _sg = importlib.import_module("synthgpu.warp_scheduler")
         WarpScheduler = _sg.WarpScheduler
         _mm = importlib.import_module("synthgpu.memory_manager")
         VirtualMemoryManager = _mm.VirtualMemoryManager
     except Exception:
-        # Last resort: load directly by file path so we never block startup
-        import importlib.util as _ilu
-        def _load(rel):
-            p = os.path.join(_project_root, rel)
-            spec = _ilu.spec_from_file_location(rel.replace("/", ".").rstrip(".py"), p)
-            mod = _ilu.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            return mod
-        WarpScheduler = _load("synthgpu/core/warp_scheduler.py").WarpScheduler
-        VirtualMemoryManager = _load("synthgpu/core/memory_manager.py").VirtualMemoryManager
+        raise RuntimeError("Cannot load SynthGPU packages — ensure backend/ is on PYTHONPATH")
 
 _scheduler = WarpScheduler()
 _memory_manager = VirtualMemoryManager()
@@ -54,6 +43,11 @@ _init_time = time.time()
 
 def get_scheduler() -> WarpScheduler:
     return _scheduler
+
+
+def record_warp_dispatch(warp_count: int, exec_ms: float) -> None:
+    """Record external shim work using the shared scheduler instance."""
+    get_scheduler().record_external_warps(warp_count, exec_ms)
 
 
 def get_memory_manager() -> VirtualMemoryManager:

@@ -107,6 +107,7 @@ int cudnnCreateActivationDescriptor(void **d) {
 int cudnnDestroyActivationDescriptor(void *d) { free(d); return CUDNN_STATUS_SUCCESS; }
 
 int cudnnSetActivationDescriptor(void *d, int mode, int nan_prop, double coef) {
+    (void)nan_prop;
     if (!d) return CUDNN_STATUS_BAD_PARAM;
     ((CudnnActDesc *)d)->mode = mode;
     ((CudnnActDesc *)d)->coef = coef;
@@ -119,6 +120,7 @@ int cudnnActivationForward(void *handle, void *act_desc,
                             const void *alpha, void *x_desc, const void *x,
                             const void *beta,  void *y_desc, void *y)
 {
+    (void)y_desc;
     if (!handle || !act_desc || !x || !y) return CUDNN_STATUS_BAD_PARAM;
 
     CudnnTensorDesc *td = (CudnnTensorDesc *)x_desc;
@@ -162,6 +164,7 @@ int cudnnSoftmaxForward(void *handle, int algo, int mode,
                          const void *alpha, void *x_desc, const void *x,
                          const void *beta,  void *y_desc, void *y)
 {
+    (void)alpha; (void)beta; (void)y_desc;
     if (!handle || !x || !y) return CUDNN_STATUS_BAD_PARAM;
 
     CudnnTensorDesc *td = (CudnnTensorDesc *)x_desc;

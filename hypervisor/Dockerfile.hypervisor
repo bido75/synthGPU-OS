@@ -1,0 +1,59 @@
+# =============================================================================
+# SynthGPU Hyper-Virtualized Split-Plane Docker Image — Lazy VRAM
+# =============================================================================
+# Stage 1: Builder — compile C CUDA shim into libsynthgpu.so
+
+FROM python:3.11-slim-bullseye AS builder
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN for i in 1 2 3; do \
+      apt-get update && apt-get install -y --no-install-recommends \
+        gcc \
+        build-essential \
+        libc6-dev \
+      && break || { echo "apt attempt $i failed, retrying..."; sleep 5; }; \
+    done \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+COPY c_shim/shim.c   shim.c
+COPY c_shim/memory.c memory.c
+
+RUN gcc -shared -fPIC -O2 -Wall -Wextra -o libsynthgpu.so \
+      shim.c memory.c -ldl -lpthread \
+    && strip libsynthgpu.so \
+    && echo "[builder] libsynthgpu.so built:" \
+    && ls -lh libsynthgpu.so
+
+# =============================================================================
+# Stage 2: Runtime — Python hypervisor + compiled shim + client entrypoint
+
+FROM python:3.11-slim-bullseye AS runtime
+
+RUN for i in 1 2 3; do \
+      apt-get update && apt-get install -y --no-install-recommends \
+        libc6 \
+      && break || { echo "apt attempt $i failed"; sleep 3; }; \
+    done \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the compiled CUDA shim
+COPY --from=builder /build/libsynthgpu.so /usr/local/lib/synthgpu/libsynthgpu.so
+RUN ldconfig /usr/local/lib/synthgpu
+
+# Copy the Python hypervisor
+COPY vgpu_hypervisor.py /hypervisor/vgpu_hypervisor.py
+
+# Copy client entrypoint
+COPY client_entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Pre-create socket directory
+RUN mkdir -p /tmp/vgpu && chmod 777 /tmp/vgpu
+
+EXPOSE 8000
+
+# Default: boot the hypervisor control plane
+CMD ["python", "/hypervisor/vgpu_hypervisor.py"]

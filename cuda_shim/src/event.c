@@ -10,6 +10,7 @@
 #define _GNU_SOURCE
 #include <stdlib.h>
 #include <stdio.h>
+#include "synthgpu_cuda.h"
 
 #ifdef _WIN32
 #  include <windows.h>
@@ -17,14 +18,11 @@
 #  include <time.h>
 #endif
 
-#define cudaSuccess           0
-#define cudaErrorInvalidValue 11
-
 /* Event struct — stores a high-resolution timestamp */
-typedef struct {
+struct CUevent_st {
     double time_ms;   /* wall-clock time in milliseconds */
     int    recorded;
-} SynthGPUEvent;
+};
 
 static double _now_ms(void) {
 #ifdef _WIN32
@@ -39,50 +37,54 @@ static double _now_ms(void) {
 #endif
 }
 
-int cudaEventCreate(void **event) {
-    if (!event) return cudaErrorInvalidValue;
-    SynthGPUEvent *e = (SynthGPUEvent *)malloc(sizeof(SynthGPUEvent));
+cudaError_t cudaEventCreate(cudaEvent_t *event) {
+    if (!event) { _last_error = cudaErrorInvalidValue; return cudaErrorInvalidValue; }
+    cudaEvent_t e = (cudaEvent_t)malloc(sizeof(*e));
+    if (!e) { _last_error = cudaErrorMemoryAllocation; return cudaErrorMemoryAllocation; }
     e->time_ms = 0.0;
     e->recorded = 0;
     *event = e;
     return cudaSuccess;
 }
 
-int cudaEventCreateWithFlags(void **event, unsigned int flags) {
+cudaError_t cudaEventCreateWithFlags(cudaEvent_t *event, unsigned int flags) {
     (void)flags;
     return cudaEventCreate(event);
 }
 
-int cudaEventRecord(void *event, void *stream) {
-    if (!event) return cudaErrorInvalidValue;
-    SynthGPUEvent *e = (SynthGPUEvent *)event;
+cudaError_t cudaEventRecord(cudaEvent_t event, cudaStream_t stream) {
+    if (!event) { _last_error = cudaErrorInvalidValue; return cudaErrorInvalidValue; }
+    cudaEvent_t e = event;
     e->time_ms  = _now_ms();
     e->recorded = 1;
     (void)stream;
     return cudaSuccess;
 }
 
-int cudaEventSynchronize(void *event) {
+cudaError_t cudaEventSynchronize(cudaEvent_t event) {
     /* No-op: CPU execution is synchronous */
     (void)event;
     return cudaSuccess;
 }
 
-int cudaEventQuery(void *event) {
+cudaError_t cudaEventQuery(cudaEvent_t event) {
     (void)event;
     return cudaSuccess;
 }
 
-int cudaEventElapsedTime(float *ms, void *start, void *end) {
-    if (!ms || !start || !end) return cudaErrorInvalidValue;
-    SynthGPUEvent *s = (SynthGPUEvent *)start;
-    SynthGPUEvent *e = (SynthGPUEvent *)end;
+cudaError_t cudaEventElapsedTime(float *ms, cudaEvent_t start, cudaEvent_t end) {
+    if (!ms || !start || !end) {
+        _last_error = cudaErrorInvalidValue;
+        return cudaErrorInvalidValue;
+    }
+    cudaEvent_t s = start;
+    cudaEvent_t e = end;
     *ms = (float)(e->time_ms - s->time_ms);
     if (*ms < 0.0f) *ms = 0.0f;
     return cudaSuccess;
 }
 
-int cudaEventDestroy(void *event) {
+cudaError_t cudaEventDestroy(cudaEvent_t event) {
     if (event) free(event);
     return cudaSuccess;
 }

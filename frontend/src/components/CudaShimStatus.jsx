@@ -2,19 +2,21 @@ import { useState, useEffect } from "react";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
-function StatusBadge({ available }) {
+function StatusBadge({ status }) {
+  const state = status?.active
+    ? { label: "Active", style: "bg-emerald-900/60 text-emerald-300 border-emerald-700", dot: "bg-emerald-400 animate-pulse" }
+    : status?.verified
+    ? { label: "Built & Verified", style: "bg-cyan-900/60 text-cyan-300 border-cyan-700", dot: "bg-cyan-400" }
+    : status?.installed
+    ? { label: "Built", style: "bg-amber-900/40 text-amber-300 border-amber-700", dot: "bg-amber-400" }
+    : { label: "Unavailable", style: "bg-red-900/40 text-red-400 border-red-800", dot: "bg-red-500" };
+
   return (
     <span
-      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold ${
-        available
-          ? "bg-emerald-900/60 text-emerald-300 border border-emerald-700"
-          : "bg-red-900/40 text-red-400 border border-red-800"
-      }`}
+      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold border ${state.style}`}
     >
-      <span
-        className={`w-1.5 h-1.5 rounded-full ${available ? "bg-emerald-400 animate-pulse" : "bg-red-500"}`}
-      />
-      {available ? "Active" : "Unavailable"}
+      <span className={`w-1.5 h-1.5 rounded-full ${state.dot}`} />
+      {state.label}
     </span>
   );
 }
@@ -69,15 +71,17 @@ export default function CudaShimStatus() {
             <span className="text-xs text-gray-500">v{status.version}</span>
           )}
         </div>
-        <StatusBadge available={!!status?.available} />
+        <StatusBadge status={status} />
       </div>
 
       {/* Error / unavailable message */}
-      {(!status?.available || error) && (
-        <div className="text-xs text-red-400 bg-red-900/20 border border-red-800/40 rounded-lg p-3">
+      {(!status?.active || error) && (
+        <div className={`text-xs rounded-lg p-3 border ${error || !status?.installed
+          ? "text-red-400 bg-red-900/20 border-red-800/40"
+          : "text-cyan-300 bg-cyan-900/20 border-cyan-800/40"}`}>
           {error
             ? `Connection error: ${error}`
-            : status?.message || "CUDA shim not running."}
+            : status?.message || "CUDA shim is built but not injected into this process."}
         </div>
       )}
 

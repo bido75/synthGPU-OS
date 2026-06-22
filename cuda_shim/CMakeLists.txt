@@ -16,6 +16,12 @@ set(SHIM_SOURCES
     src/event.c
     src/bridge.c
     src/telemetry.c
+    src/device_info.c
+    src/cublas.c
+    src/cudnn.c
+    src/cuda_streams.c
+    src/virtual_vram.c
+    src/python_bridge.c
 )
 
 # ── Shared library ───────────────────────────────────────────────────
@@ -25,6 +31,12 @@ target_include_directories(${SHIM_TARGET}
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+
+if(UNIX AND NOT APPLE)
+    add_executable(synthgpu_cuda_demo tests/demo_client.c)
+    target_include_directories(synthgpu_cuda_demo PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    target_compile_options(synthgpu_cuda_demo PRIVATE -Wall -Wextra -Werror)
+endif()
 
 # ── Platform flags ───────────────────────────────────────────────────
 if(UNIX AND NOT APPLE)
@@ -80,6 +92,9 @@ install(TARGETS ${SHIM_TARGET}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+if(TARGET synthgpu_cuda_demo)
+    install(TARGETS synthgpu_cuda_demo RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/synthgpu)
 
 # ── Summary ──────────────────────────────────────────────────────────

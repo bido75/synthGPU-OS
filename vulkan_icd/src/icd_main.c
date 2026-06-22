@@ -415,7 +415,7 @@ static PFN_vkVoidFunction get_instance_proc(const char *name) {
 #pragma comment(linker, "/EXPORT:vk_icdNegotiateLoaderICDInterfaceVersion")
 #endif
 
-VKAPI_ATTR VkResult VKAPI_CALL
+SYNTHGPU_EXPORT VKAPI_ATTR VkResult VKAPI_CALL
 vk_icdNegotiateLoaderICDInterfaceVersion(uint32_t *pVersion) {
     /* Support loader interface versions 2-7 */
     if (*pVersion > CURRENT_LOADER_ICD_INTERFACE_VERSION)
@@ -423,13 +423,13 @@ vk_icdNegotiateLoaderICDInterfaceVersion(uint32_t *pVersion) {
     return VK_SUCCESS;
 }
 
-VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
+SYNTHGPU_EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
 vk_icdGetInstanceProcAddr(VkInstance instance, const char *pName) {
     (void)instance;
     return get_instance_proc(pName);
 }
 
-VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
+SYNTHGPU_EXPORT VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
 vk_icdGetPhysicalDeviceProcAddr(VkInstance instance, const char *pName) {
     (void)instance;
     return get_instance_proc(pName);

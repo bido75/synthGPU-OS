@@ -1,0 +1,145 @@
+# =============================================================================
+# SynthGPU v0.3 — Kubernetes Sidecar Pod
+# =============================================================================
+#
+# Deploys a SynthGPU accelerator sidecar alongside an AI workload container.
+# Both containers share the localhost loopback for low-latency communication.
+#
+# Apply:
+#   kubectl apply -f synthgpu-pod.yaml
+#
+# Verify:
+#   kubectl get pods -l app=synthgpu-demo
+#   kubectl logs -l app=synthgpu-demo -c synthgpu-daemon
+#   kubectl exec -it <pod-name> -c synthgpu-daemon -- curl -s localhost:8000/api/vulkan/status
+#
+# Tear down:
+#   kubectl delete -f synthgpu-pod.yaml
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: synthgpu-sidecar-demo
+  labels:
+    app: synthgpu-demo
+    version: v0.3.0
+  annotations:
+    description: "SynthGPU Virtual GPU Accelerator — Sidecar Demo"
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+spec:
+  # ── Shared volume for IPC between containers ──────────────────────────
+  volumes:
+    - name: dshm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 4Gi
+    - name: tmp
+      emptyDir: {}
+
+  # ── Sidecar Daemon: SynthGPU Engine ──────────────────────────────────
+  containers:
+    - name: synthgpu-daemon
+      image: synthgpu-core:latest
+      imagePullPolicy: IfNotPresent
+      ports:
+        - containerPort: 8000
+          protocol: TCP
+          name: synthgpu-api
+      env:
+        - name: SYNTHGPU_VRAM_MB
+          value: "2048"
+        - name: OPENBLAS_NUM_THREADS
+          value: "4"
+        - name: OMP_NUM_THREADS
+          value: "4"
+        - name: OLLAMA_NUM_PARALLEL
+          value: "1"
+        - name: OLLAMA_MAX_LOADED_MODELS
+          value: "1"
+      resources:
+        requests:
+          cpu: "2"
+          memory: "2Gi"
+        limits:
+          cpu: "4"
+          memory: "4Gi"
+      volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+        - name: tmp
+          mountPath: /tmp
+      # ── Readiness: confirms the FastAPI app is accepting traffic ────
+      readinessProbe:
+        httpGet:
+          path: /api/device/status
+          port: 8000
+        initialDelaySeconds: 10
+        periodSeconds: 15
+        timeoutSeconds: 5
+        successThreshold: 1
+        failureThreshold: 3
+      # ── Liveness: confirms the Vulkan ICD telemetry endpoint responds ─
+      livenessProbe:
+        httpGet:
+          path: /api/vulkan/status
+          port: 8000
+        initialDelaySeconds: 30
+        periodSeconds: 30
+        timeoutSeconds: 10
+        successThreshold: 1
+        failureThreshold: 3
+      # ── Startup: gives the backend time to compile C extensions ─────
+      startupProbe:
+        httpGet:
+          path: /api/device/status
+          port: 8000
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        failureThreshold: 30
+
+    # ── Workload Container: AI Runtime (Placeholder) ──────────────────
+    - name: workload
+      image: python:3.11-slim-bookworm
+      imagePullPolicy: IfNotPresent
+      command:
+        - /bin/sh
+        - -c
+        - |
+          echo "=== SynthGPU Workload Container ==="
+          echo "Accelerator endpoint: http://localhost:8000"
+          echo ""
+          echo "Waiting for SynthGPU sidecar to be ready..."
+          until curl -sf http://localhost:8000/api/device/status > /dev/null 2>&1; do
+            sleep 2
+          done
+          echo "✓ SynthGPU accelerator is ready."
+          echo ""
+          echo "Device info:"
+          curl -s http://localhost:8000/api/device/info | python3 -m json.tool
+          echo ""
+          echo "=== Workload container ready. ==="
+          echo "You can exec into this container and run:"
+          echo "  curl -s http://localhost:8000/api/benchmark/run -X POST -H 'Content-Type: application/json' -d '{\"benchmark\":\"gemm\"}'"
+          echo ""
+          # Sleep forever to allow interactive exploration
+          tail -f /dev/null
+      env:
+        - name: SYNTHGPU_API_URL
+          value: "http://localhost:8000"
+      resources:
+        requests:
+          cpu: "1"
+          memory: "512Mi"
+        limits:
+          cpu: "2"
+          memory: "2Gi"
+      volumeMounts:
+        - name: dshm
+          mountPath: /dev/shm
+        - name: tmp
+          mountPath: /tmp
+
+  # ── Scheduling ───────────────────────────────────────────────────────
+  restartPolicy: Always
+  terminationGracePeriodSeconds: 30

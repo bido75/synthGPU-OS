@@ -154,42 +154,20 @@ static void spirv_execute_workgroup(const SynthGPU_DispatchContext *ctx,
  * that the backend can read via /api/cuda_shim/status.
  */
 
-#define SYNTHGPU_TELEMETRY_FILE "synthgpu_vulkan_warps.tmp"
+#define SYNTHGPU_TELEMETRY_FILE "/tmp/synthgpu_vulkan_warps.tmp"
 
-static void notify_warp_scheduler(uint32_t total_groups, double exec_ms) {
-    /* Method 1: direct Python API (works when loaded as extension) */
-#ifdef Py_LIMITED_API
-    if (Py_IsInitialized()) {
-        PyGILState_STATE gs = PyGILState_Ensure();
-        PyObject *mod = PyImport_ImportModule("synthgpu.core.warp_scheduler");
-        if (mod) {
-            PyObject *sched = PyObject_GetAttrString(mod, "_global_scheduler");
-            if (sched) {
-                PyObject *res = PyObject_CallMethod(
-                    sched, "record_external_warps", "id",
-                    (int)total_groups, exec_ms);
-                Py_XDECREF(res);
-                Py_DECREF(sched);
-            }
-            Py_DECREF(mod);
-        }
-        PyGILState_Release(gs);
-        return;
-    }
-#endif
-
-    /* Method 2: write telemetry to temp file for backend polling */
-    FILE *f = fopen(SYNTHGPU_TELEMETRY_FILE, "w");
+static void synthgpu_record_dispatch_file(uint32_t total_groups, double exec_ms) {
+    /* The backend polls this file, avoiding GIL contention during dispatch. */
+    FILE *f = fopen(SYNTHGPU_TELEMETRY_FILE, "a");
     if (f) {
-        fprintf(f, "{\"vulkan_warps\":%u,\"exec_ms\":%.2f}\n",
-                total_groups, exec_ms);
+        fprintf(f, "%u,%.2f\n", total_groups, exec_ms);
         fclose(f);
     }
 }
 
 /* ── Main Dispatch Entry Point ───────────────────────────────────────── */
 
-VkResult synthgpu_spirv_dispatch(const SynthGPU_DispatchContext *ctx) {
+SYNTHGPU_EXPORT VkResult synthgpu_spirv_dispatch(const SynthGPU_DispatchContext *ctx) {
     if (!ctx || !ctx->spirv_code) return VK_SUCCESS;
 
     uint32_t total_groups = ctx->group_count_x
@@ -201,7 +179,7 @@ VkResult synthgpu_spirv_dispatch(const SynthGPU_DispatchContext *ctx) {
     double est_ms = total_groups * ctx->local_size_x
                   * ctx->local_size_y * ctx->local_size_z
                   * 0.001;  /* ~1µs per invocation estimate */
-    notify_warp_scheduler(total_groups, est_ms);
+    synthgpu_record_dispatch_file(total_groups, est_ms);
 
     /* Execute workgroups through minimal interpreter */
     for (uint32_t gz = 0; gz < ctx->group_count_z; gz++)

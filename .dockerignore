@@ -1,0 +1,66 @@
+# Git
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+venv/
+.venv/
+env/
+*.env
+
+# Node
+frontend/node_modules/
+frontend/.vite/
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Test / Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Model artifacts (large)
+*.onnx
+*.pt
+*.bin
+*.safetensors
+models/
+
+# Dev/docs
+*.md
+*.docx
+*.doc
+
+# CI
+.github/
+
+# Build artifacts (host)
+vulkan_icd/build/
+cuda_shim/build/
+
+# Archived/packaged versions
+archive/
+
+# Root-level synthgpu/ (moved to archive/ — avoid accidental re-add)
+/synthgpu/
+
+# Temp
+.tmp/
+*.tmp

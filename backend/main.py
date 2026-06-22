@@ -4,12 +4,12 @@ SynthGPU FastAPI Backend v0.2 — Enhanced with Ollama/LM Studio proxy.
 
 import os as _os
 _cpu_count = str(_os.cpu_count() or 4)
-_os.environ.setdefault("OPENBLAS_NUM_THREADS", _cpu_count)
+_os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 _os.environ.setdefault("OMP_NUM_THREADS", _cpu_count)
-_os.environ.setdefault("MKL_NUM_THREADS", _cpu_count)
+_os.environ.setdefault("MKL_NUM_THREADS", "1")
 _os.environ.setdefault("NUMEXPR_NUM_THREADS", _cpu_count)
 _os.environ.setdefault("VECLIB_MAXIMUM_THREADS", _cpu_count)
-_os.environ.setdefault("BLAS_NUM_THREADS", _cpu_count)
+_os.environ.setdefault("BLAS_NUM_THREADS", "1")
 _os.environ.setdefault("NPY_DISABLE_CPU_FEATURES", "")
 _os.environ.setdefault("OLLAMA_NUM_PARALLEL", "1")
 _os.environ.setdefault("OLLAMA_MAX_LOADED_MODELS", "1")
@@ -22,11 +22,12 @@ import tempfile
 import threading
 import uuid
 from pathlib import Path
+from synthgpu._version import __version__
 from typing import Optional, Set
 
 import numpy as np
 import psutil
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -113,10 +114,18 @@ def print_startup_memory_report():
     print("╚══════════════════════════════════════════╝")
     print()
 
+_default_backend_host = (
+    "host.docker.internal" if os.environ.get("SYNTHGPU_DOCKER") else "localhost"
+)
+OLLAMA_URL = os.environ.get(
+    "SYNTHGPU_OLLAMA_URL", f"http://{_default_backend_host}:11434"
+)
+
 try:
     from synthgpu.inference_proxy import (
         SynthGPUTelemetryEngine,
         InferenceProxyRouter,
+        OLLAMA_URL,
         detect_backend as detect_llm_backend,
     )
     INFERENCE_PROXY_AVAILABLE = True
@@ -125,7 +134,7 @@ except ImportError as e:
     INFERENCE_PROXY_AVAILABLE = False
 
 # ── App Setup ──────────────────────────────────────────────────
-app = FastAPI(title="SynthGPU API", version="0.2.0-beta")
+app = FastAPI(title="SynthGPU API", version=__version__)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -502,7 +511,7 @@ async def get_ram_stats():
         "status":          status,
         "message":         message,
         "recommendation":  recommendation,
-        "swapping":        swap_used_mb > 100,
+        "swapping":        swap_used_mb > 500 or (swap_used_mb > 100 and available_mb < 512),
         "safe_n_ctx":      safe_n_ctx,
         "synthgpu_mb":     round(
             psutil.Process(os.getpid()).memory_info().rss / (1024 * 1024), 1
@@ -533,7 +542,7 @@ async def demo_ready():
     try:
         import urllib.request
         req = urllib.request.Request(
-            "http://localhost:11434/api/tags",
+            f"{OLLAMA_URL}/api/tags",
             headers={"Origin": "http://localhost:8000"},
         )
         with urllib.request.urlopen(req, timeout=2) as r:
@@ -665,7 +674,8 @@ class TokenGenRequest(BaseModel):
 
 @app.post("/api/generate/tokens")
 async def generate_tokens(req: TokenGenRequest):
-    d = req.d_model
+    d = min(req.d_model, 64) if gpu.memory.is_degraded else req.d_model
+    effective_tokens = min(req.num_tokens, 5) if gpu.memory.is_degraded else req.num_tokens
     n_h = max(1, d // 64)
     s = 0.02
     np.random.seed(42)
@@ -694,13 +704,22 @@ async def generate_tokens(req: TokenGenRequest):
     }
 
     async def stream_tokens():
-        runner = BenchmarkRunner(gpu)
-        for token_data in runner.run_token_generation(num_tokens=req.num_tokens):
-            msg = {"type": "token", **token_data, "total_tokens": req.num_tokens}
+        for token_data in gpu.generate_tokens(model_config, max_tokens=effective_tokens):
+            pct = int(((token_data['step'] + 1) / effective_tokens) * 100)
+            msg = {
+                "type": "token",
+                **token_data,
+                "total_tokens": effective_tokens,
+                "pct_complete": pct,
+            }
             await broadcast(_token_connections, msg)
 
     asyncio.create_task(stream_tokens())
-    return {"status": "streaming", "num_tokens": req.num_tokens}
+    return {
+        "status": "streaming",
+        "num_tokens": effective_tokens,
+        "requested_tokens": req.num_tokens,
+    }
 
 
 @app.post("/api/model/upload")
@@ -743,6 +762,17 @@ async def upload_model(file: UploadFile = File(...)):
 class ModelRunRequest(BaseModel):
     input_shape: list
     dtype: str = "float32"
+    provider: str = "cpu"
+
+
+@app.get("/api/model/providers")
+async def model_providers():
+    available = onnx_provider.get_available_providers()
+    return {
+        "available_providers": available,
+        "cpu": "CPUExecutionProvider" in available,
+        "openvino": "OpenVINOExecutionProvider" in available,
+    }
 
 
 _DTYPE_MAP = {
@@ -847,7 +877,9 @@ async def run_model(model_id: str, req: ModelRunRequest):
                 _make_dummy_input(req.input_shape, req.dtype)}
 
     def _run():
-        return onnx_provider.run_model(model_info["path"], feed)
+        return onnx_provider.run_model(
+            model_info["path"], feed, provider=req.provider
+        )
 
     loop = asyncio.get_event_loop()
     try:
@@ -890,17 +922,41 @@ for _p in [str(_project_root), str(_backend_dir)]:
     if _p not in _sys.path:
         _sys.path.insert(0, _p)
 
+def _native_cuda_shim_loaded() -> bool:
+    """Return true only when shim symbols are loaded into this process."""
+    try:
+        import ctypes
+        process = ctypes.CDLL(None)
+        getattr(process, "synthgpu_bridge_init")
+        return True
+    except (AttributeError, OSError):
+        return False
+
+
+_SHIM_CANDIDATES = (
+    Path("/usr/local/lib/synthgpu/libsynthgpu_cuda.so"),
+    _project_root / "cuda_shim" / "build" / "libsynthgpu_cuda.so",
+    _project_root / "cuda_shim" / "build" / "Release" / "synthgpu_cuda.dll",
+)
+
 try:
     from cuda_shim.kernels.bridge_api import _scheduler as _shim_scheduler
-    _SHIM_AVAILABLE = True
-except Exception:
+    _SHIM_AVAILABLE = _native_cuda_shim_loaded()
+except Exception as e:
+    import traceback
+    print(f"[SynthGPU] CUDA shim bridge import failed: {e}")
+    traceback.print_exc()
     _SHIM_AVAILABLE = False
     _shim_scheduler = None
+
+_SHIM_INSTALLED = _SHIM_AVAILABLE or any(path.is_file() for path in _SHIM_CANDIDATES)
+_SHIM_VERIFICATION_MARKER = Path("/tmp/synthgpu_cuda_verified")
 
 
 @app.get("/api/cuda_shim/status")
 async def cuda_shim_status():
     try:
+        shim_verified = _SHIM_VERIFICATION_MARKER.is_file()
         # Pull live warp/kernel telemetry from the Python-side device (always available)
         device_tele = gpu.get_telemetry()
         sched = device_tele["scheduler"]
@@ -916,10 +972,16 @@ async def cuda_shim_status():
                 pass
 
         return {
-            "installed":          True,
-            "active":             True,
-            "available":          True,
-            "version":            "0.3.0",
+            "installed":          _SHIM_INSTALLED,
+            "active":             _SHIM_AVAILABLE,
+            "available":          _SHIM_AVAILABLE,
+            "verified":           shim_verified,
+            "message":            None if _SHIM_AVAILABLE else (
+                "Built & verified (no client currently running)."
+                if shim_verified else
+                "Built (run the CUDA demo client to verify LD_PRELOAD interception)."
+            ),
+            "version":            __version__,
             "warps_executed":     sched.get("warps_executed", 0) + shim_warps,
             "warp_throughput":    sched.get("warp_throughput_per_sec", 0.0),
             "kernels_dispatched": sched.get("kernels_dispatched", sched.get("warps_executed", 0)),
@@ -932,10 +994,11 @@ async def cuda_shim_status():
         }
     except Exception as e:
         return {
-            "installed":  True,
-            "active":     True,
-            "available":  True,
-            "version":    "0.3.0",
+            "installed":  _SHIM_INSTALLED,
+            "active":     False,
+            "available":  False,
+            "verified":   _SHIM_VERIFICATION_MARKER.is_file(),
+            "version":    __version__,
             "message":    None,
             "warps_executed":     0,
             "warp_throughput":    0.0,
@@ -956,7 +1019,7 @@ async def vulkan_status():
         vulkan_icd_installed = _check_vulkan_icd_installed()
 
     import os, csv
-    telemetry_file = "synthgpu_vulkan_warps.tmp"
+    telemetry_file = "/tmp/synthgpu_vulkan_warps.tmp"
     if os.path.exists(telemetry_file):
         try:
             with open(telemetry_file, "r") as f:
@@ -971,7 +1034,7 @@ async def vulkan_status():
         "installed":          vulkan_icd_installed,
         "active":             vulkan_icd_installed,
         "device_name":        "SynthGPU Virtual Accelerator v0.3",
-        "version":            "v0.3.0",
+        "version":            f"v{__version__}",
         "vendor_id":          "0x5347",
         "api_version":        "1.3.0",
         "dispatch_count":     vulkan_dispatch_count,

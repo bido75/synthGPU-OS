@@ -1,0 +1,227 @@
+# =============================================================================
+# SynthGPU Hyper-Virtualized Kubernetes Manifest
+# =============================================================================
+#
+# Deploys the split-plane vGPU architecture on Kubernetes:
+#   1. DaemonSet: runs the Python MMU Hypervisor on every GPU-capable node
+#   2. Pod: sample AI workload that shares IPC and mounts /dev/shm
+#
+# Prerequisites:
+#   - Nodes must have /dev/shm available (default on Linux)
+#   - hostIPC must not be restricted by the PodSecurityPolicy / OPA
+#
+# Apply:
+#   kubectl create ns synthgpu
+#   kubectl apply -f vgpu-k8s-matrix.yaml -n synthgpu
+# =============================================================================
+
+---
+# ── Namespace ──────────────────────────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: synthgpu
+
+---
+# ── Hypervisor DaemonSet ──────────────────────────────────────────
+# Runs the Python control plane on every node where AI workloads
+# will schedule. Uses hostIPC so /dev/shm is the real host RAM disk.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: synthgpu-hypervisor
+  namespace: synthgpu
+  labels:
+    app: synthgpu
+    component: hypervisor
+spec:
+  selector:
+    matchLabels:
+      app: synthgpu
+      component: hypervisor
+  template:
+    metadata:
+      labels:
+        app: synthgpu
+        component: hypervisor
+    spec:
+      # ═════════════════════════════════════════════════════════════
+      # CRITICAL: hostIPC=true — the hypervisor and workloads must
+      # share the kernel's IPC namespace so that mmap(MAP_SHARED)
+      # on /dev/shm returns the EXACT SAME physical pages. Without
+      # this, the zero-copy illusion fails → segfault.
+      # ═════════════════════════════════════════════════════════════
+      hostIPC: true
+
+      containers:
+        - name: hypervisor
+          image: synthgpu/hypervisor:latest
+          imagePullPolicy: IfNotPresent
+
+          command: ["python", "/hypervisor/vgpu_hypervisor.py"]
+
+          env:
+            - name: SYNTHGPU_VRAM_GB
+              value: "8"
+            - name: SYNTHGPU_SHM_PATH
+              value: "/dev/shm/synth_vgpu_vram"
+            - name: SYNTHGPU_UDS_PATH
+              value: "/tmp/vgpu/control.sock"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+
+          # ── Shared memory & UDS mounts ─────────────────────
+          volumeMounts:
+            - name: devshm
+              mountPath: /dev/shm
+            - name: vgpu-socket
+              mountPath: /tmp/vgpu
+            - name: libsynthgpu
+              mountPath: /usr/local/lib/synthgpu
+
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "500m"
+            limits:
+              memory: "14Gi"
+              cpu: "2"
+
+          livenessProbe:
+            exec:
+              command: ["test", "-S", "/tmp/vgpu/control.sock"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+      volumes:
+        - name: devshm
+          hostPath:
+            path: /dev/shm
+            type: Directory
+        - name: vgpu-socket
+          hostPath:
+            path: /tmp/vgpu
+            type: DirectoryOrCreate
+        - name: libsynthgpu
+          hostPath:
+            path: /var/lib/synthgpu/lib
+            type: DirectoryOrCreate
+
+      nodeSelector:
+        # Target nodes that should expose virtual GPUs
+        synthgpu.node: "true"
+
+      tolerations:
+        - key: "synthgpu/hypervisor"
+          operator: "Exists"
+          effect: "NoSchedule"
+
+---
+# ── AI Workload Pod (sample) ──────────────────────────────────────
+# This pod tricks PyTorch (or any CUDA app) into thinking it has a
+# physical NVIDIA GPU by mounting the shared IPC namespace, the UDS,
+# and injecting LD_PRELOAD.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ai-workload-sample
+  namespace: synthgpu
+  labels:
+    app: synthgpu
+    component: workload
+spec:
+  # ═════════════════════════════════════════════════════════════
+  # hostIPC is required — or alternatively set
+  #   shareProcessNamespace: true
+  # but hostIPC is simpler and guaranteed to work.
+  # ═════════════════════════════════════════════════════════════
+  hostIPC: true
+
+  containers:
+    - name: pytorch
+      image: pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime
+      imagePullPolicy: IfNotPresent
+
+      command: ["/usr/local/bin/entrypoint.sh"]
+      args:
+        - python
+        - -c
+        - |
+          import torch
+          print(f"CUDA available: {torch.cuda.is_available()}")
+          print(f"Device count: {torch.cuda.device_count()}")
+          if torch.cuda.is_available():
+              print(f"Device name: {torch.cuda.get_device_name(0)}")
+              t = torch.zeros(4, 4, device="cuda")
+              print(f"Tensor on GPU: {t}")
+
+      env:
+        # ═════════════════════════════════════════════════════
+        # THE TRICK: intercept every CUDA call
+        # ═════════════════════════════════════════════════════
+        - name: LD_PRELOAD
+          value: /usr/local/lib/synthgpu/libsynthgpu.so
+        - name: SYNTHGPU_UDS_PATH
+          value: /tmp/vgpu/control.sock
+
+      volumeMounts:
+        - name: devshm
+          mountPath: /dev/shm
+        - name: vgpu-socket
+          mountPath: /tmp/vgpu
+        - name: libsynthgpu
+          mountPath: /usr/local/lib/synthgpu
+          readOnly: true
+
+      resources:
+        requests:
+          memory: "2Gi"
+          cpu: "1"
+        limits:
+          memory: "8Gi"
+          cpu: "4"
+
+  volumes:
+    - name: devshm
+      hostPath:
+        path: /dev/shm
+        type: Directory
+    - name: vgpu-socket
+      hostPath:
+        path: /tmp/vgpu
+        type: DirectoryOrCreate
+    - name: libsynthgpu
+      hostPath:
+        path: /var/lib/synthgpu/lib
+        type: DirectoryOrCreate
+
+  restartPolicy: Never
+
+---
+# ── StorageClass (optional — for /dev/shm expansion) ─────────────
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: synthgpu-shm
+  namespace: synthgpu
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+
+---
+# ── Service (optional — for dashboard access) ─────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: synthgpu-hypervisor
+  namespace: synthgpu
+  labels:
+    app: synthgpu
+    component: hypervisor
+spec:
+  selector:
+    app: synthgpu
+    component: hypervisor
+  ports:
+    - port: 8000
+      targetPort: 8000
+      name: http

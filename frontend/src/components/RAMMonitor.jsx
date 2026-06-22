@@ -2,18 +2,19 @@ import { useState, useEffect } from 'react'
 
 export default function RAMMonitor() {
   const [ram, setRam] = useState(null)
+  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
   useEffect(() => {
     const fetchRam = async () => {
       try {
-        const r = await fetch('http://localhost:8000/api/system/ram')
+        const r = await fetch(`${apiUrl}/api/system/ram`)
         if (r.ok) setRam(await r.json())
       } catch (_) {}
     }
     fetchRam()
     const id = setInterval(fetchRam, 2000)
     return () => clearInterval(id)
-  }, [])
+  }, [apiUrl])
 
   if (!ram) return null
 

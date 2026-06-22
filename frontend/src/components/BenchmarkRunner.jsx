@@ -56,9 +56,15 @@ function ResultBar({ result }) {
       </div>
 
       <div className="flex gap-4">
-        <span style={{ color: '#10b981', fontSize: '0.7rem', fontWeight: 700 }}>
-          {speedup.toFixed(2)}x faster
-        </span>
+        {speedup >= 1 ? (
+          <span style={{ color: '#10b981', fontSize: '0.7rem', fontWeight: 700 }}>
+            {speedup.toFixed(2)}x faster
+          </span>
+        ) : (
+          <span style={{ color: '#f59e0b', fontSize: '0.7rem', fontWeight: 700 }}>
+            {(1 / speedup).toFixed(2)}x slower
+          </span>
+        )}
         <span style={{ color: '#94a3b8', fontSize: '0.7rem' }}>
           {result.throughput?.toFixed ? result.throughput.toFixed(3) : result.throughput} {result.throughput_unit}
         </span>

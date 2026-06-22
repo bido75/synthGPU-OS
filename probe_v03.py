@@ -75,6 +75,7 @@ class PhaseReport:
 ROOT = Path(__file__).parent.resolve()
 ICD  = ROOT / "vulkan_icd"
 BACKEND = ROOT / "backend"
+CUDA_SHIM = ROOT / "cuda_shim"
 
 def ok(id, label, detail=""):
     return CheckResult(id, label, True, detail)
@@ -85,10 +86,10 @@ def fail(id, label, detail="", hint=""):
 def skip(id, label, detail="not applicable on this platform"):
     return CheckResult(id, label, True, detail, skipped=True)
 
-def run(cmd, cwd=None, timeout=30):
+def run(cmd, cwd=None, timeout=30, env=None):
     try:
         r = subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=timeout, cwd=cwd or ROOT)
+                           timeout=timeout, cwd=cwd or ROOT, env=env)
         return r.returncode, r.stdout, r.stderr
     except subprocess.TimeoutExpired:
         return -1, "", "TIMEOUT"
@@ -658,12 +659,61 @@ def probe_P9(quick=False) -> PhaseReport:
 # ══════════════════════════════════════════════════════════════════════════════
 # PHASE 10 — Full Compute (runtime)
 # ══════════════════════════════════════════════════════════════════════════════
+def append_cuda_demo_checks(r: PhaseReport) -> None:
+    if IS_WIN:
+        r.results.append(skip("P10-cuda-demo", "CUDA LD_PRELOAD demo", "Linux only"))
+        return
+
+    demo_candidates = [
+        Path("/usr/local/bin/synthgpu_cuda_demo"),
+        CUDA_SHIM / "build" / "synthgpu_cuda_demo",
+    ]
+    lib_candidates = [
+        Path("/usr/local/lib/synthgpu/libsynthgpu_cuda.so"),
+        CUDA_SHIM / "build" / "libsynthgpu_cuda.so",
+    ]
+    demo = next((path for path in demo_candidates if path.is_file()), None)
+    shim_lib = next((path for path in lib_candidates if path.is_file()), None)
+
+    r.results.append(ok("P10-cuda-demo-exists", "CUDA demo client exists", str(demo)) if demo
+        else fail("P10-cuda-demo-exists", "CUDA demo client exists",
+                  "No built synthgpu_cuda_demo found", "Build cuda_shim first"))
+    if not demo:
+        return
+    if not shim_lib:
+        r.results.append(fail("P10-cuda-library", "CUDA shim library exists",
+                              "No libsynthgpu_cuda.so found", "Build cuda_shim first"))
+        return
+
+    rc, out, err = run([str(demo)], timeout=15)
+    control_output = out + err
+    if rc != 0 and "CUDA runtime symbols unavailable" in control_output:
+        r.results.append(ok("P10-cuda-control", "CUDA demo fails without LD_PRELOAD",
+                            control_output.strip()))
+    else:
+        r.results.append(fail("P10-cuda-control", "CUDA demo fails without LD_PRELOAD",
+                              control_output[:300], "Demo must not link directly to the shim"))
+
+    preload_env = os.environ.copy()
+    preload_env["LD_PRELOAD"] = str(shim_lib)
+    rc, out, err = run([str(demo)], timeout=30, env=preload_env)
+    preload_output = out + err
+    if rc == 0 and "ALL CHECKS PASSED" in preload_output:
+        r.results.append(ok("P10-cuda-preload", "CUDA demo passes with LD_PRELOAD",
+                            preload_output[:300]))
+    else:
+        r.results.append(fail("P10-cuda-preload", "CUDA demo passes with LD_PRELOAD",
+                              preload_output[:300], "Check shim exports and runtime dependencies"))
+
+
 def probe_P10(quick=False) -> PhaseReport:
     r = PhaseReport("P10", "Full Compute — Vulkan Apps Route Through SynthGPU")
 
     if quick:
         r.results.append(skip("P10-quick", "Compute runtime tests", "skipped (--quick mode)"))
         return r
+
+    append_cuda_demo_checks(r)
 
     test_script = ICD / "tests" / "test_compute.py"
     test_enum   = ICD / "tests" / "test_enumeration.py"

@@ -21,7 +21,9 @@ import os
 import platform
 import psutil
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_DEMO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _DEMO_ROOT)
+sys.path.insert(0, os.path.join(_DEMO_ROOT, "backend"))
 from synthgpu import SynthGPU
 from synthgpu.ops import gpu_ops
 

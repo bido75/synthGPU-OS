@@ -16,7 +16,9 @@ import numpy as np
 import time
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_BENCH_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _BENCH_ROOT)
+sys.path.insert(0, os.path.join(_BENCH_ROOT, "backend"))
 
 from synthgpu import SynthGPU
 from synthgpu.ops import gpu_ops
