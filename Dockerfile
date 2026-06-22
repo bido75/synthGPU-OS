@@ -94,8 +94,8 @@ COPY cuda_shim/ cuda_shim/
 COPY probe_v03.py .
 COPY requirements.txt .
 RUN for i in 1 2 3; do \
-      pip install --index-url https://pypi.org/simple --retries 5 --timeout 120 -r requirements.txt \
-      && pip install --index-url https://pypi.org/simple --retries 5 --timeout 120 -r backend/requirements.txt \
+      pip install --index-url https://pypi.org/simple --retries 5 --timeout 600 -r requirements.txt \
+      && pip install --index-url https://pypi.org/simple --retries 5 --timeout 600 -r backend/requirements.txt \
       && break; \
       if [ "$i" -eq 3 ]; then exit 1; fi; \
       echo "pip attempt $i failed, retrying..."; sleep 10; \
