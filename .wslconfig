@@ -1,0 +1,9 @@
+[wsl2]
+localhostForwarding=true
+
+[experimental]
+networkingMode=mirrored
+dnsTunneling=true
+firewall=false
+hostAddressLoopback=true
+autoProxy=true

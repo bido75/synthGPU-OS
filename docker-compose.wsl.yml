@@ -1,0 +1,13 @@
+services:
+  synthgpu-core:
+    network_mode: host
+    ports: !reset []
+    networks: !reset []
+    extra_hosts: !reset []
+
+  synthgpu-client-node:
+    network_mode: host
+    environment:
+      - SYNTHGPU_API_URL=http://localhost:8000
+      - OLLAMA_HOST=http://localhost:11434
+    networks: !reset []

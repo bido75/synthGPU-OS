@@ -115,8 +115,33 @@ Run from an Administrator PowerShell session:
 
 The installer checks virtualization and WSL, installs Ubuntu 24.04 when
 needed, installs Docker Engine inside Ubuntu, configures the Windows-host
-Ollama route, forwards Windows `localhost:8000` to the WSL2 VM, and starts
-SynthGPU at `http://localhost:8000`.
+Ollama route, and starts SynthGPU at `http://localhost:8000`.
+
+Before running the installer, enable WSL2 mirrored networking so Windows and
+Ubuntu share localhost. Copy the repository `.wslconfig` file to
+`$env:USERPROFILE\.wslconfig`, then restart WSL:
+
+```powershell
+Copy-Item .\.wslconfig "$env:USERPROFILE\.wslconfig" -Force
+wsl --shutdown
+```
+
+With mirrored networking, the dashboard is reachable from Windows at
+`http://localhost:8000`, and Ollama running on the Windows host is reachable
+from Ubuntu at `http://localhost:11434`. No dynamic WSL2 IP or `netsh
+portproxy` rule is required.
+
+The tracked `.wslconfig` also enables DNS tunneling and host address loopback,
+and disables Windows firewall filtering for WSL traffic. Those settings avoid
+the stale-port-forward and blocked-loopback failure modes seen with the native
+WSL2 Docker Engine path.
+
+The WSL installer uses `docker-compose.wsl.yml`, which puts the runtime
+containers on Docker host networking. Docker bridge port publishing does not
+consistently surface on Windows localhost under WSL2 mirrored networking, while
+host networking does. The installer also removes the unreachable
+`172.16.16.16` default route when a real LAN default route is present, so WSL
+uses the host LAN gateway for GitHub and package traffic.
 
 WSL should be current before installation. Check with `wsl --version`; use
 `wsl --update` only when an older WSL/kernel is installed.
