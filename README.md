@@ -115,10 +115,17 @@ Run from an Administrator PowerShell session:
 
 The installer checks virtualization and WSL, installs Ubuntu 24.04 when
 needed, installs Docker Engine inside Ubuntu, configures the Windows-host
-Ollama route, and starts SynthGPU at `http://localhost:8000`.
+Ollama route, forwards Windows `localhost:8000` to the WSL2 VM, and starts
+SynthGPU at `http://localhost:8000`.
 
 WSL should be current before installation. Check with `wsl --version`; use
 `wsl --update` only when an older WSL/kernel is installed.
+
+PowerShell note for future installer scripts: native commands can write
+informational progress to stderr even when they succeed. Keep
+`$ErrorActionPreference = "Stop"` for PowerShell cmdlets, but judge native
+commands such as `wsl.exe`, `apt-get`, `systemctl`, and `docker` by their exit
+code instead of treating any stderr output as failure.
 
 ### Linux/macOS
 

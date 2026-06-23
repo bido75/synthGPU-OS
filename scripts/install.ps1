@@ -56,6 +56,27 @@ function Invoke-WslRoot {
     }
 }
 
+function Invoke-WslRootOutput {
+    param([string]$Command)
+    # Use the same base64 transport as Invoke-WslRoot so commands containing
+    # pipes, quotes, awk fields, or redirects survive the PowerShell->WSL hop.
+    $encodedCommand = [Convert]::ToBase64String(
+        [Text.Encoding]::UTF8.GetBytes($Command)
+    )
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = & wsl.exe -d $Distro -u root -- bash -lc "echo $encodedCommand|base64 -d|env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin bash"
+        $wslExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+    if ($wslExitCode -ne 0) {
+        throw "WSL command failed with exit code $wslExitCode"
+    }
+    return (($output -join "`n") -replace "`0", "").Trim()
+}
+
 function Get-LinuxInstallContext {
     # Avoid a pipe delimiter here: Windows PowerShell 5.1 can remove the
     # surrounding quotes when forwarding this command through wsl.exe.
@@ -72,6 +93,22 @@ function Get-LinuxInstallContext {
         throw "Ubuntu install user context was malformed: $context"
     }
     return @{ User = $parts[0]; Home = $parts[1]; Repo = "$($parts[1])/synthgpu" }
+}
+
+function Set-LocalhostPortProxy {
+    param(
+        [int]$ListenPort,
+        [int]$ConnectPort,
+        [string]$ConnectAddress
+    )
+    if ($ConnectAddress -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+        throw "Refusing to configure port proxy with invalid WSL2 IP: $ConnectAddress"
+    }
+    & netsh.exe interface portproxy delete v4tov4 listenport=$ListenPort listenaddress=127.0.0.1 2>$null | Out-Null
+    & netsh.exe interface portproxy add v4tov4 listenport=$ListenPort listenaddress=127.0.0.1 connectport=$ConnectPort connectaddress=$ConnectAddress
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not configure localhost:$ListenPort -> $ConnectAddress`:$ConnectPort port proxy"
+    }
 }
 
 if ($Uninstall) {
@@ -133,6 +170,9 @@ if ((Get-WslVersion) -ne 2) {
         wsl.exe --set-version $Distro 2
     }
 }
+Invoke-Checked "Setting $Distro as the default WSL distribution" {
+    wsl.exe --set-default $Distro
+}
 
 Invoke-WslRoot "echo 'WSL2 alive'"
 $context = Get-LinuxInstallContext
@@ -150,16 +190,17 @@ Invoke-WslRoot "if [ -d '$repo/.git' ]; then cd '$repo' && git fetch origin '$Br
 if ($linuxUser -ne "root") {
     Invoke-WslRoot "chown -R '${linuxUser}:${linuxUser}' '$repo'"
 }
-$windowsHostIp = (& wsl.exe -d $Distro -u root -- bash -lc "ip route show default | awk '{print `$3; exit}'") -join ""
-$windowsHostIp = ($windowsHostIp -replace "`0", "").Trim()
-if (-not $windowsHostIp) {
-    throw "Could not determine the Windows host address from WSL2"
+$windowsHostIp = Invoke-WslRootOutput "ip route show default | awk '/default/ {print `$3; exit}'"
+if ($windowsHostIp -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+    throw "Could not determine the Windows host address from WSL2. Parsed value: $windowsHostIp"
 }
 Invoke-WslRoot "cd '$repo' && touch .env && if grep -q '^SYNTHGPU_OLLAMA_URL=' .env; then sed -i 's|^SYNTHGPU_OLLAMA_URL=.*|SYNTHGPU_OLLAMA_URL=http://$windowsHostIp`:11434|' .env; else printf '\nSYNTHGPU_OLLAMA_URL=http://$windowsHostIp`:11434\n' >> .env; fi"
 Invoke-WslRoot "docker compose version >/dev/null"
 Invoke-WslRoot "deadline=`$((`$(date +%s) + 30)); until docker version >/dev/null 2>&1; do if [ `$(date +%s) -ge `$deadline ]; then echo 'Docker Engine did not become ready within 30 seconds.' >&2; exit 1; fi; sleep 3; done"
 Invoke-WslRoot "cd '$repo' && docker compose -p '$ProjectName' up -d --build"
 Invoke-WslRoot "cd '$repo' && docker compose -p '$ProjectName' ps"
+$wslIp = (Invoke-WslRootOutput "hostname -I | awk '{print `$1}'")
+Set-LocalhostPortProxy -ListenPort 8000 -ConnectPort 8000 -ConnectAddress $wslIp
 
 Write-Host "SynthGPU is running at http://localhost:8000"
 Write-Host "Checkout: $Distro`:$repo"
