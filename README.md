@@ -128,8 +128,7 @@ wsl --shutdown
 
 With mirrored networking, the dashboard is reachable from Windows at
 `http://localhost:8000`, and Ollama running on the Windows host is reachable
-from Ubuntu at `http://localhost:11434`. No dynamic WSL2 IP or `netsh
-portproxy` rule is required.
+from Ubuntu at `http://localhost:11434`.
 
 The tracked `.wslconfig` also enables DNS tunneling and host address loopback,
 and disables Windows firewall filtering for WSL traffic. Those settings avoid
@@ -139,9 +138,11 @@ WSL2 Docker Engine path.
 The WSL installer uses `docker-compose.wsl.yml`, which puts the runtime
 containers on Docker host networking. Docker bridge port publishing does not
 consistently surface on Windows localhost under WSL2 mirrored networking, while
-host networking does. The installer also removes the unreachable
-`172.16.16.16` default route when a real LAN default route is present, so WSL
-uses the host LAN gateway for GitHub and package traffic.
+host networking does. The installer refreshes a Windows localhost proxy to the
+current reachable WSL mirrored address after each run, so the browser can keep
+using `http://localhost:8000` even when WSL addresses change. It also removes
+the unreachable `172.16.16.16` default route when a real LAN default route is
+present, so WSL uses the host LAN gateway for GitHub and package traffic.
 
 WSL should be current before installation. Check with `wsl --version`; use
 `wsl --update` only when an older WSL/kernel is installed.

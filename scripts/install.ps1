@@ -57,6 +57,25 @@ function Invoke-WslRoot {
     }
 }
 
+function Invoke-WslRootOutput {
+    param([string]$Command)
+    $encodedCommand = [Convert]::ToBase64String(
+        [Text.Encoding]::UTF8.GetBytes($Command)
+    )
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = & wsl.exe -d $Distro -u root -- bash -lc "echo $encodedCommand|base64 -d|env PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin bash"
+        $wslExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+    if ($wslExitCode -ne 0) {
+        throw "WSL command failed with exit code $wslExitCode"
+    }
+    return (($output -join "`n") -replace "`0", "").Trim()
+}
+
 function Get-LinuxInstallContext {
     # Avoid a pipe delimiter here: Windows PowerShell 5.1 can remove the
     # surrounding quotes when forwarding this command through wsl.exe.
@@ -73,6 +92,22 @@ function Get-LinuxInstallContext {
         throw "Ubuntu install user context was malformed: $context"
     }
     return @{ User = $parts[0]; Home = $parts[1]; Repo = "$($parts[1])/synthgpu" }
+}
+
+function Set-LocalhostPortProxy {
+    param(
+        [int]$ListenPort,
+        [int]$ConnectPort,
+        [string]$ConnectAddress
+    )
+    if ($ConnectAddress -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+        throw "Refusing to configure port proxy with invalid WSL2 IP: $ConnectAddress"
+    }
+    & netsh.exe interface portproxy delete v4tov4 listenport=$ListenPort listenaddress=127.0.0.1 2>$null | Out-Null
+    & netsh.exe interface portproxy add v4tov4 listenport=$ListenPort listenaddress=127.0.0.1 connectport=$ConnectPort connectaddress=$ConnectAddress
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not configure localhost:$ListenPort -> $ConnectAddress`:$ConnectPort port proxy"
+    }
 }
 
 if ($Uninstall) {
@@ -160,6 +195,21 @@ Invoke-WslRoot "docker compose version >/dev/null"
 Invoke-WslRoot "deadline=`$((`$(date +%s) + 30)); until docker version >/dev/null 2>&1; do if [ `$(date +%s) -ge `$deadline ]; then echo 'Docker Engine did not become ready within 30 seconds.' >&2; exit 1; fi; sleep 3; done"
 Invoke-WslRoot "cd '$repo' && docker compose $ComposeFiles -p '$ProjectName' up -d --build"
 Invoke-WslRoot "cd '$repo' && docker compose $ComposeFiles -p '$ProjectName' ps"
+$wslIps = (Invoke-WslRootOutput "hostname -I") -split "\s+" | Where-Object {
+    $_ -match '^\d+\.\d+\.\d+\.\d+$' -and
+    $_ -notmatch '^127\.' -and
+    $_ -notmatch '^169\.254\.' -and
+    $_ -notmatch '^172\.17\.' -and
+    $_ -notmatch '^172\.18\.'
+}
+$proxyTarget = @($wslIps | Select-Object -Skip 1 -First 1)[0]
+if (-not $proxyTarget) {
+    $proxyTarget = @($wslIps | Select-Object -First 1)[0]
+}
+if (-not $proxyTarget) {
+    throw "Could not determine a WSL2 address for localhost forwarding"
+}
+Set-LocalhostPortProxy -ListenPort 8000 -ConnectPort 8000 -ConnectAddress $proxyTarget
 
 Write-Host "SynthGPU is running at http://localhost:8000"
 Write-Host "Checkout: $Distro`:$repo"
