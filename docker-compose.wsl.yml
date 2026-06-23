@@ -10,4 +10,12 @@ services:
     environment:
       - SYNTHGPU_API_URL=http://localhost:8000
       - OLLAMA_HOST=http://localhost:11434
+    command: >
+      sh -c "
+        echo '=== SynthGPU Client Node (WSL host network) ===' &&
+        echo 'Backend: http://localhost:8000' &&
+        python3 -c \"import urllib.request; print(urllib.request.urlopen('http://localhost:8000/api/device/status', timeout=5).read().decode())\" || true &&
+        echo 'Client node ready. Keeping alive for exploration.' &&
+        tail -f /dev/null
+      "
     networks: !reset []
